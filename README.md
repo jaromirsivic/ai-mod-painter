@@ -11,14 +11,25 @@ Python 3.12–3.13 and PySide6 (Qt 6). It runs on Windows, macOS and Linux.
 
 You need [uv](https://docs.astral.sh/uv/).
 
+The simplest way:
+
+- **Windows:** double-click `start.bat`. You can also run `start.bat D:\path\to\render`.
+- **macOS / Linux:** run `./start.sh` or `./start.sh /path/to/render`.
+
+Both scripts prepare the Python environment on the first start (`uv sync --locked`), then
+open the app. Without a folder argument the app opens the last folder. On Windows the
+app runs without a console window, and the start window closes on its own.
+
+From a terminal:
+
 ```
 uv sync
 uv run ai-mod-painter                       # opens the last folder
 uv run ai-mod-painter D:\path\to\render     # opens this folder
 ```
 
-On Windows `scripts\launch.bat` does the same, and on macOS / Linux `scripts/launch.sh`
-does.
+`scripts\launch.bat` and `scripts/launch.sh` are thin `uv run` wrappers for the same
+command.
 
 ## Expected folder shape
 
