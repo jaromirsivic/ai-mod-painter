@@ -3,9 +3,11 @@
 The templates are the ``*.md`` files in ``assets/prompts`` of the repository. A template
 names the input image ``{SOURCE_IMAGE}`` and the output image ``{DESTINATION_IMAGE}``;
 both are replaced with absolute paths, and the result is written to
-``prompt_queue/<hash>.md`` for another program to pick up. The hash is the first 16 hex
-characters of the SHA-256 of ``<absolute render.png path>,<absolute template path>``,
-so the same image with the same prompt always gets the same queue file.
+``prompt_queue/to_process/<hash>.md`` for another program to pick up; that program
+moves a finished file to ``prompt_queue/processed`` (the app never touches it). The
+hash is the first 16 hex characters of the SHA-256 of
+``<absolute render.png path>,<absolute template path>``, so the same image with the
+same prompt always gets the same queue file.
 
 The processed image is written next to ``render.png`` as ``render-photo.png``;
 ``first_photo_frame`` finds the first frame that already has one.
@@ -25,7 +27,9 @@ from ai_mod_painter.core.library import Animation, layer_key, natural_key
 
 PROJECT_DIR = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = PROJECT_DIR / "assets" / "prompts"
-QUEUE_DIR = PROJECT_DIR / "prompt_queue"
+QUEUE_ROOT = PROJECT_DIR / "prompt_queue"
+QUEUE_DIR = QUEUE_ROOT / "to_process"
+"""Where Add writes; the processing program reads from here."""
 
 SOURCE_PLACEHOLDER = "{SOURCE_IMAGE}"
 DESTINATION_PLACEHOLDER = "{DESTINATION_IMAGE}"

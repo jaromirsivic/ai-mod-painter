@@ -82,11 +82,12 @@ The combo on the right of the bar lists the templates in `assets/prompts/*.md` (
 names without `.md`). **Add** is enabled when the current frame has `render.png`. It
 takes the chosen template, replaces `{SOURCE_IMAGE}` with the absolute path of that
 `render.png` and `{DESTINATION_IMAGE}` with `render-photo.png` in the same folder, and
-writes the result to `prompt_queue/<hash>.md` in this repository. The hash is the
+writes the result to `prompt_queue/to_process/<hash>.md` in this repository. The hash is the
 first 16 hex characters of the SHA-256 of `<absolute render.png path>,<absolute
 template path>`, so the same frame with the same prompt always gets the same file, and
 adding it again replaces it. Every Add is also recorded in the review log. Another
-program processes the queue; the app only fills it.
+program processes the queue and moves each finished file to `prompt_queue/processed`;
+the app only fills `to_process`.
 
 Each template has a color, shown as a square in the combo: the templates in
 alphabetical order take red, orange, yellow, green, cyan, blue and magenta (the Watch Me
@@ -150,5 +151,5 @@ The source is in `src/ai_mod_painter`:
 - `ui/` holds the widgets.
 
 The design and the decisions behind it are in `implementation-plan.md`,
-`implementation-plan-2.md`, `implementation-plan-3.md`, `implementation-plan-4.md` and
-`implementation-plan-5.md`.
+`implementation-plan-2.md`, `implementation-plan-3.md`, `implementation-plan-4.md`,
+`implementation-plan-5.md` and `implementation-plan-6.md`.

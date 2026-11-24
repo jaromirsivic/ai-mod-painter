@@ -10,6 +10,7 @@ from ai_mod_painter.core.library import scan_animation
 from ai_mod_painter.core.prompt_queue import (
     PHOTO_LAYER,
     PROJECT_DIR,
+    QUEUE_DIR,
     destination_for,
     enqueue,
     first_photo_frame,
@@ -95,3 +96,16 @@ def test_first_photo_frame(make_tree):
     )
     assert first_photo_frame(scan_animation(root / "a")) == 2
     assert first_photo_frame(scan_animation(root / "b")) is None
+
+
+def test_queue_dir_is_to_process_in_the_repository():
+    assert QUEUE_DIR == PROJECT_DIR / "prompt_queue" / "to_process"
+
+
+def test_enqueue_creates_the_nested_queue_folder(tmp_path):
+    template = tmp_path / "convert.md"
+    template.write_text("{SOURCE_IMAGE}", encoding="utf-8")
+    queue = tmp_path / "prompt_queue" / "to_process"
+    queued = enqueue(template, tmp_path / "render.png", queue)
+    assert queued.parent == queue
+    assert [p.name for p in queue.iterdir()] == [queued.name]
