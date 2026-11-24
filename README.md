@@ -46,14 +46,14 @@ command.
   A frame folder without images is skipped.
 - A layer is identified by its file name, without regard to letter case. A layer that
   is missing from a frame is simply not drawn in that frame.
-- The app writes one file of its own into an animation folder: `ai-mod-config.json`
-  (`{"approved": true}`) when you approve the animation.
+- The app writes one file of its own into an animation folder: `ai-mod-config.json`,
+  a small log (see [Review log](#review-log)).
 
 ## Using it
 
 | Where | What |
 |---|---|
-| Left panel | A path box and a **…** button to choose the folder. Animations are listed 100 per page, with **‹ ›** to change pages. Rows are gray; the **thumbs-up** at the end of a row approves the animation (green row, `ai-mod-config.json` is written; click again to take it back), the **trash** marks it for deletion (red row, nothing is deleted yet). **Reload** lists the folder again, clears the deletion marks and goes to page 1. **Delete Selected** asks once more and then deletes the marked animation folders **permanently** (no Recycle Bin). |
+| Left panel | A path box and a **…** button to choose the folder. Animations are listed 100 per page, with **‹ ›** to change pages. Rows are gray; the **thumbs-up** near the end of a row approves the animation (green row, `ai-mod-config.json` is written; click again to take it back), the **trash**, the last icon, marks it for deletion (red row, nothing is deleted yet). The last one wins: marking an approved row takes the approval back, approving a marked row removes the mark. **Reload** lists the folder again, clears the deletion marks and goes to page 1. **Delete Selected** asks once more and then deletes the marked animation folders **permanently** (no Recycle Bin). |
 | Bar above the image | **◧ / ◨** show or hide the side panels. **▶ / ■** plays the frames in a loop at 10 fps until Stop. The slider and its label show the current frame. On the right, the prompt combo and **Add** put a prompt into the queue (see below). |
 | Image | Mouse wheel zooms (1/64×–64×) around the cursor. Drag with the left or middle button to pan. |
 | Right panel | Layers, with the top row drawn on top. The combo next to the title shows **Default** or **Custom** (see below). Drag a row to reorder. The **eye** shows or hides a layer, and **R** draws its opaque pixels red with their alpha kept, which works as a mask. Rows dim when the layer is missing from the current frame. |
@@ -80,20 +80,47 @@ The combo on the right of the bar lists the templates in `assets/prompts/*.md` (
 names without `.md`). **Add** is enabled when the current frame has `render.png`. It
 takes the chosen template, replaces `{SOURCE_IMAGE}` with the absolute path of that
 `render.png` and `{DESTINATION_IMAGE}` with `render-photo.png` in the same folder, and
-writes the result to `prompt_queue/prompt-YYYY-MM-DD-HH-MM-SS.md` in this repository
-(`-2`, `-3`, … when there are more in the same second). Another program processes the
-queue; the app only fills it.
+writes the result to `prompt_queue/<hash>.md` in this repository. The hash is the
+first 16 hex characters of the SHA-256 of `<absolute render.png path>,<absolute
+template path>`, so the same frame with the same prompt always gets the same file, and
+adding it again replaces it. Every Add is also recorded in the review log. Another
+program processes the queue; the app only fills it.
+
+### Review log
+
+`ai-mod-config.json` in the animation folder (times are local, with the UTC offset):
+
+```json
+{
+  "approved": true,
+  "approved_changed_at": "2026-11-24T06:35:12+01:00",
+  "prompts": [
+    {"prompt": "convert_autumn.md", "frame": "frame3",
+     "queued_at": "2026-11-24T06:36:40+01:00", "queue_file": "3f9a0c1d2e4b5a67.md"}
+  ]
+}
+```
+
+`approved_changed_at` changes with every approve and un-approve; `prompts` gets one
+entry per Add. Other keys in the file are kept.
 
 ### Shortcuts
 
 | Key | Action |
 |---|---|
 | Space | Play / Stop |
-| `,` / `.` | Previous / next frame |
+| ↑ / ↓ | Previous / next animation (across pages; stops at the first and the last) |
+| ← / → or `,` / `.` | Previous / next frame (wraps around) |
+| A | Thumbs-up of the selected animation |
+| D | Trash of the selected animation |
+| Ctrl+Space | Add the prompt to the queue (Watch Me Recorder also uses Ctrl+Space while it runs) |
 | F | Zoom to fit |
 | 1 | 100 % |
 | F5 | Reload (new animations, frames, files and prompts; keeps the page and the deletion marks) |
 | Ctrl+O | Open folder |
+
+The arrows, A, D and Ctrl+Space work wherever the focus is in the window; only the path
+box keeps the arrows and letters for typing.
 
 ## Development
 
@@ -109,5 +136,5 @@ The source is in `src/ai_mod_painter`:
   review file and deletion, the prompt queue, the compositor and the image cache.
 - `ui/` holds the widgets.
 
-The design and the decisions behind it are in `implementation-plan.md` and
-`implementation-plan-2.md`.
+The design and the decisions behind it are in `implementation-plan.md`,
+`implementation-plan-2.md` and `implementation-plan-3.md`.

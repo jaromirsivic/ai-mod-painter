@@ -5,8 +5,9 @@ import json
 import pytest
 from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLineEdit
 
+from ai_mod_painter.core.prompt_queue import queue_file_name
 from ai_mod_painter.core.review import CONFIG_NAME, read_approved
 from ai_mod_painter.ui.animation_panel import thumb_rect, trash_rect
 from ai_mod_painter.ui.image_view import MAX_ZOOM, MIN_ZOOM
@@ -350,12 +351,21 @@ def test_add_queues_the_filled_prompt_for_render_png(qtbot, window, make_tree, t
     assert window.master.add_button.isEnabled()
 
     window.master.add_button.click()
-    queued = list((tmp_path / "queue").glob("prompt-*.md"))
-    assert len(queued) == 1
+    window.master.add_button.click()  # same frame and prompt: the same queue file
+    queued = list((tmp_path / "queue").iterdir())
     source = root / "a1" / "frame0" / "render.png"
+    template = tmp_path / "prompts" / "convert_summer.md"
+    assert [p.name for p in queued] == [queue_file_name(source, template)]
     destination = source.with_name("render-photo.png")
     assert queued[0].read_text(encoding="utf-8") == f"in {source} out {destination}"
     assert "Queued convert_summer for a1/frame0" in window.message_label.text()
+
+    config = json.loads((root / "a1" / CONFIG_NAME).read_text(encoding="utf-8"))
+    assert [(r["prompt"], r["frame"], r["queue_file"]) for r in config["prompts"]] == [
+        ("convert_summer.md", "frame0", queued[0].name),
+        ("convert_summer.md", "frame0", queued[0].name),
+    ]
+    assert all(r["queued_at"] for r in config["prompts"])
 
     window.master.slider.setValue(1)  # frame1 has no render.png
     assert not window.master.add_button.isEnabled()
@@ -394,7 +404,8 @@ def test_approve_writes_the_config_and_is_read_back(qtbot, window, make_tree):
     click_icon(qtbot, panel, 0, thumb_rect)
     assert not panel.is_approved(root / "a1")
     config = json.loads((root / "a1" / CONFIG_NAME).read_text(encoding="utf-8"))
-    assert config == {"approved": False}
+    assert config["approved"] is False
+    assert config["approved_changed_at"]
 
 
 def test_trash_marks_and_approve_clears_the_mark(qtbot, window, make_tree):
@@ -459,3 +470,133 @@ def test_reload_button_goes_to_page_one_and_clears_marks_f5_keeps_both(qtbot, wi
     panel.reload_button.click()
     assert panel.current_page == 0
     assert not panel.marked_animations()
+
+
+def test_trash_is_the_last_icon_of_the_row(window, make_tree):
+    assert window.open_root(make_tree({"a1/": None}))
+    view = window.animations.list_widget
+    row = view.visualItemRect(view.item(0))
+    assert trash_rect(row).left() > thumb_rect(row).left()
+    assert trash_rect(row).right() <= row.right()
+
+
+def row_state(panel, path):
+    return panel.is_approved(path), panel.is_marked(path)
+
+
+def test_the_last_of_approve_and_mark_wins(qtbot, window, make_tree):
+    root = make_tree({"a1/": None})
+    a1 = root / "a1"
+    assert window.open_root(root)
+    panel = window.animations
+
+    click_icon(qtbot, panel, 0, thumb_rect)
+    assert row_state(panel, a1) == (True, False)
+    click_icon(qtbot, panel, 0, trash_rect)  # marking takes the approval back
+    assert row_state(panel, a1) == (False, True)
+    assert not read_approved(a1)
+    click_icon(qtbot, panel, 0, thumb_rect)  # approving removes the mark
+    assert row_state(panel, a1) == (True, False)
+    click_icon(qtbot, panel, 0, thumb_rect)
+    assert row_state(panel, a1) == (False, False)
+    click_icon(qtbot, panel, 0, trash_rect)
+    click_icon(qtbot, panel, 0, trash_rect)
+    assert row_state(panel, a1) == (False, False)
+
+
+# --- window-wide keys -------------------------------------------------------------------
+
+
+def press(qtbot, widget, key, modifier=Qt.KeyboardModifier.NoModifier):
+    widget.setFocus()
+    qtbot.keyClick(widget, key, modifier)
+
+
+def test_up_and_down_move_through_the_list_across_pages_and_stop_at_the_ends(
+    qtbot, window, make_tree
+):
+    root = make_tree({f"anim{i}/": None for i in range(101)})
+    assert window.open_root(root)
+    panel = window.animations
+    target = window.layers.list_widget  # keys work wherever the focus is
+
+    press(qtbot, target, Qt.Key.Key_Up)  # nothing selected: ↑ takes the last row
+    assert panel.selected_animation().name == "anim99"
+    press(qtbot, target, Qt.Key.Key_Down)  # last row of page 1 -> first row of page 2
+    assert panel.current_page == 1
+    assert panel.selected_animation().name == "anim100"
+    press(qtbot, target, Qt.Key.Key_Down)  # the very last animation: stays
+    assert panel.selected_animation().name == "anim100"
+    press(qtbot, target, Qt.Key.Key_Up)  # back to the last row of page 1
+    assert panel.current_page == 0
+    assert panel.selected_animation().name == "anim99"
+
+    panel.select_row(0)
+    press(qtbot, panel.list_widget, Qt.Key.Key_Up)  # the very first animation: stays
+    assert panel.current_page == 0
+    assert panel.selected_animation().name == "anim0"
+
+
+def test_down_opens_the_next_animation(qtbot, window, make_tree):
+    root = frame_tree(make_tree, name="a1")
+    frame_tree(make_tree, name="a2")
+    open_first(qtbot, window, root)
+    with qtbot.waitSignal(window.animation_loaded, timeout=5000):
+        press(qtbot, window.master.prompt_combo, Qt.Key.Key_Down)
+    assert window.animation.name == "a2"
+
+
+def test_left_and_right_step_through_the_frames_and_wrap(qtbot, window, make_tree):
+    open_first(qtbot, window, frame_tree(make_tree, frames=3))
+    target = window.animations.list_widget
+    press(qtbot, target, Qt.Key.Key_Left)
+    assert window.frame_index == 2
+    press(qtbot, target, Qt.Key.Key_Right)
+    assert window.frame_index == 0
+    press(qtbot, target, Qt.Key.Key_Right)
+    assert window.frame_index == 1
+
+
+def test_a_and_d_act_on_the_selected_row(qtbot, window, make_tree):
+    root = make_tree({"a1/": None, "a2/": None})
+    assert window.open_root(root)
+    panel = window.animations
+    panel.select_row(1)
+    a2 = root / "a2"
+    target = panel.list_widget
+
+    press(qtbot, target, Qt.Key.Key_A)
+    assert row_state(panel, a2) == (True, False)
+    assert read_approved(a2)
+    press(qtbot, target, Qt.Key.Key_D)
+    assert row_state(panel, a2) == (False, True)
+    press(qtbot, target, Qt.Key.Key_A)
+    assert row_state(panel, a2) == (True, False)
+    press(qtbot, target, Qt.Key.Key_A)
+    assert row_state(panel, a2) == (False, False)
+    assert row_state(panel, root / "a1") == (False, False)
+
+
+def test_ctrl_space_adds_the_prompt(qtbot, window, make_tree, tmp_path):
+    write_prompt(tmp_path)
+    window.load_prompts()
+    open_first(qtbot, window, make_tree({"a1/frame0/render.png": {"size": (8, 4)}}))
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier)
+    assert len(list((tmp_path / "queue").iterdir())) == 1
+    assert window.is_playing() is False  # Ctrl+Space is not Play
+
+
+def test_text_field_keeps_arrows_and_letters(qtbot, window, make_tree):
+    root = make_tree({"a1/": None, "a2/": None})
+    assert window.open_root(root)
+    panel = window.animations
+    panel.select_row(0)
+    field = panel.findChild(QLineEdit)
+    field.setText("ab")
+    field.setCursorPosition(2)
+    press(qtbot, field, Qt.Key.Key_Left)
+    press(qtbot, field, Qt.Key.Key_A)
+    press(qtbot, field, Qt.Key.Key_Down)
+    assert field.text() == "aab"
+    assert panel.selected_animation().name == "a1"
+    assert not panel.is_approved(root / "a1")

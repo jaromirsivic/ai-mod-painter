@@ -5,11 +5,23 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeySequence
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QRunnable,
+    QSettings,
+    Qt,
+    QThreadPool,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QSplitter,
@@ -30,7 +42,7 @@ from ai_mod_painter.core.prompt_queue import (
     enqueue,
     list_prompts,
 )
-from ai_mod_painter.core.review import delete_folder
+from ai_mod_painter.core.review import append_prompt_record, delete_folder
 from ai_mod_painter.ui.animation_panel import AnimationPanel
 from ai_mod_painter.ui.image_view import ImageView, format_zoom
 from ai_mod_painter.ui.layers_panel import DEFAULT_MODE, LayersPanel
@@ -103,6 +115,9 @@ class MainWindow(QMainWindow):
         self._timer.timeout.connect(self._on_tick)
 
         self._restore_settings()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
     # --- construction ------------------------------------------------------------------
 
@@ -568,9 +583,57 @@ class MainWindow(QMainWindow):
         except (OSError, UnicodeDecodeError) as error:
             self._show_error(f"Cannot add the prompt {template.stem}: {error}")
             return
-        self._show_info(
-            f"Queued {template.stem} for {self._animation.name}/{frame.name} as {queued.name}"
-        )
+        where = f"{self._animation.name}/{frame.name}"
+        try:
+            append_prompt_record(self._animation.path, template.name, frame.name, queued.name)
+        except OSError as error:
+            self._show_error(
+                f"Queued {template.stem} for {where} as {queued.name}, but cannot write "
+                f"the log in the animation folder: {error.strerror or error}"
+            )
+            return
+        self._show_info(f"Queued {template.stem} for {where} as {queued.name}")
+
+    # --- keys ----------------------------------------------------------------------------
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        """Window-wide keys: arrows, A, D and Ctrl+Space, whatever widget has the focus.
+
+        Text fields keep the arrows and letters; popups and dialogs are left alone.
+        """
+        if event.type() != QEvent.Type.KeyPress or not isinstance(watched, QWidget):
+            return False
+        if watched.window() is not self or QApplication.activePopupWidget() is not None:
+            return False
+        assert isinstance(event, QKeyEvent)
+        # The focus widget, not ``watched``: a key a text field ignores (↑ / ↓) travels on
+        # to its parents and must not move the list from there.
+        in_text_field = isinstance(QApplication.focusWidget(), QLineEdit)
+        action = self._key_action(event, in_text_field)
+        if action is None:
+            return False
+        action()
+        return True
+
+    def _key_action(self, event: QKeyEvent, in_text_field: bool) -> Callable[[], None] | None:
+        key = event.key()
+        modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if key == Qt.Key.Key_Space and modifiers == Qt.KeyboardModifier.ControlModifier:
+            return self._add_from_key
+        if in_text_field or modifiers != Qt.KeyboardModifier.NoModifier:
+            return None
+        return {
+            Qt.Key.Key_Up: lambda: self.animations.select_next(-1),
+            Qt.Key.Key_Down: lambda: self.animations.select_next(1),
+            Qt.Key.Key_Left: lambda: self.step(-1),
+            Qt.Key.Key_Right: lambda: self.step(1),
+            Qt.Key.Key_A: self.animations.toggle_approved_selected,
+            Qt.Key.Key_D: self.animations.toggle_marked_selected,
+        }.get(key)
+
+    def _add_from_key(self) -> None:
+        if self.master.add_button.isEnabled():
+            self.add_prompt()
 
     # --- status ------------------------------------------------------------------------
 
@@ -633,6 +696,9 @@ class MainWindow(QMainWindow):
             self.view.set_message("Open a folder with animations (File → Open folder…)")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
         self.stop()
         self._settings.setValue("geometry", self.saveGeometry())
         self._settings.setValue("splitter", self.splitter.saveState())

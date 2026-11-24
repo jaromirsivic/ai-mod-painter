@@ -1,9 +1,11 @@
 """Left panel: root folder path, Reload / Delete Selected, the animations, the pager.
 
-Animations are listed 100 per page. Each row has a trash icon (mark for deletion: the
-row turns red, nothing is deleted until Delete Selected) and a thumbs-up icon (approve:
-the row turns green and ``ai-mod-config.json`` is written into the animation folder).
-Rows are gray otherwise. Deletion marks are kept in memory only.
+Animations are listed 100 per page. Each row has a thumbs-up icon (approve: the row
+turns green and ``ai-mod-config.json`` is written into the animation folder) and, as the
+last item, a trash icon (mark for deletion: the row turns red, nothing is deleted until
+Delete Selected). Rows are gray otherwise. Both icons are switches and the last one
+wins: marking an approved row takes the approval back, approving a marked row removes
+the mark. Deletion marks are kept in memory only.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ MARKED_ROLE = Qt.ItemDataRole.UserRole + 3
 
 ROW_HEIGHT = 26
 ICON = 18
-THUMB_RIGHT = 4  # gap between the thumbs-up icon and the row's right edge
+TRASH_RIGHT = 4  # gap between the trash icon and the row's right edge
 ICON_GAP = 6
 
 GRAY = QColor(128, 128, 128, 45)
@@ -45,13 +47,13 @@ GREEN = QColor(46, 160, 67, 120)
 RED = QColor(210, 45, 45, 130)
 
 
-def thumb_rect(row: QRect) -> QRect:
-    return QRect(row.right() - THUMB_RIGHT - ICON + 1, row.center().y() - ICON // 2, ICON, ICON)
-
-
 def trash_rect(row: QRect) -> QRect:
-    thumb = thumb_rect(row)
-    return QRect(thumb.left() - ICON_GAP - ICON, thumb.top(), ICON, ICON)
+    return QRect(row.right() - TRASH_RIGHT - ICON + 1, row.center().y() - ICON // 2, ICON, ICON)
+
+
+def thumb_rect(row: QRect) -> QRect:
+    trash = trash_rect(row)
+    return QRect(trash.left() - ICON_GAP - ICON, trash.top(), ICON, ICON)
 
 
 def _thumb_path(r: QRectF) -> QPainterPath:
@@ -125,7 +127,9 @@ class _AnimationDelegate(QStyledItemDelegate):
         color = palette.highlightedText().color() if selected else palette.text().color()
         painter.setPen(color)
         trash = trash_rect(row)
-        text_rect = QRect(row.left() + 6, row.top(), trash.left() - row.left() - 10, row.height())
+        first_icon = thumb_rect(row)
+        text_width = first_icon.left() - row.left() - 10
+        text_rect = QRect(row.left() + 6, row.top(), text_width, row.height())
         elided = opt.fontMetrics.elidedText(text, Qt.TextElideMode.ElideMiddle, text_rect.width())
         align = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
         painter.drawText(text_rect, align, elided)
@@ -351,23 +355,74 @@ class AnimationPanel(QWidget):
         self._list.setCurrentRow(row)
 
     def toggle_approved(self, path: Path) -> None:
-        """Approve or un-approve: writes ``ai-mod-config.json`` and clears a deletion mark."""
+        """Thumbs-up / A: approve or un-approve; approving removes a deletion mark."""
+        path = Path(path)
         item = self._item_of(path)
         if item is None:
             return
         approved = not bool(item.data(APPROVED_ROLE))
+        if not self._write_approval(item, approved):
+            return
+        if approved:
+            self._set_marked(path, False)
+
+    def toggle_marked(self, path: Path) -> None:
+        """Trash / D: mark or unmark for deletion; marking takes an approval back."""
+        path = Path(path)
+        marked = not self.is_marked(path)
+        item = self._item_of(path)
+        if marked and item is not None and bool(item.data(APPROVED_ROLE)):
+            if not self._write_approval(item, False):
+                return
+        self._set_marked(path, marked)
+
+    def toggle_approved_selected(self) -> None:
+        path = self.selected_animation()
+        if path is not None:
+            self.toggle_approved(path)
+
+    def toggle_marked_selected(self) -> None:
+        path = self.selected_animation()
+        if path is not None:
+            self.toggle_marked(path)
+
+    def select_next(self, delta: int) -> None:
+        """↑ / ↓: the previous / next animation, across pages, stopping at both ends.
+
+        With no row selected, ↓ selects the first row of the page and ↑ the last.
+        """
+        count = self._list.count()
+        if count == 0 or delta == 0:
+            return
+        row = self._list.currentRow()
+        if row < 0:
+            target = 0 if delta > 0 else count - 1
+        else:
+            target = row + delta
+        if target < 0:
+            if self._page == 0:
+                return
+            self.set_page(self._page - 1)
+            target = self._list.count() - 1
+        elif target >= count:
+            if self._page >= self.page_total() - 1:
+                return
+            self.set_page(self._page + 1)
+            target = 0
+        self._list.setCurrentRow(target)
+        self._list.scrollToItem(self._list.item(target))
+
+    # --- internals ---------------------------------------------------------------------
+
+    def _write_approval(self, item: QListWidgetItem, approved: bool) -> bool:
+        path = item.data(PATH_ROLE)
         try:
             write_approved(path, approved)
         except OSError as error:
             self.error.emit(f"Cannot write the approval of {path.name}: {error.strerror or error}")
-            return
+            return False
         item.setData(APPROVED_ROLE, approved)
-        self._set_marked(path, False)
-
-    def toggle_marked(self, path: Path) -> None:
-        self._set_marked(path, not self.is_marked(path))
-
-    # --- internals ---------------------------------------------------------------------
+        return True
 
     def _item_of(self, path: Path) -> QListWidgetItem | None:
         for row in range(self._list.count()):

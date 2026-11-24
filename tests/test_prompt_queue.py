@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,6 @@ from ai_mod_painter.core.prompt_queue import (
     list_prompts,
     queue_file_name,
 )
-
-NOW = datetime(2026, 11, 24, 7, 5, 9)
 
 
 def test_project_dir_is_the_repository():
@@ -32,12 +31,25 @@ def test_destination_adds_photo_to_the_stem():
     assert destination_for(Path("D:/r/frame0/render.png")) == Path("D:/r/frame0/render-photo.png")
 
 
-def test_queue_file_name():
-    assert queue_file_name(NOW) == "prompt-2026-11-24-07-05-09.md"
-    assert queue_file_name(NOW, 3) == "prompt-2026-11-24-07-05-09-3.md"
+def test_queue_file_name_is_16_hex_of_sha256_of_both_paths(tmp_path):
+    source = tmp_path / "anim" / "frame0" / "render.png"
+    template = tmp_path / "prompts" / "convert_autumn.md"
+    key = f"{os.path.abspath(source)},{os.path.abspath(template)}"
+    expected = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] + ".md"
+    assert queue_file_name(source, template) == expected
+    assert len(expected) == 19
+
+    other_frame = tmp_path / "anim" / "frame1" / "render.png"
+    other_prompt = tmp_path / "prompts" / "convert_winter.md"
+    names = {
+        queue_file_name(source, template),
+        queue_file_name(other_frame, template),
+        queue_file_name(source, other_prompt),
+    }
+    assert len(names) == 3
 
 
-def test_enqueue_fills_every_placeholder_and_keeps_the_text(tmp_path):
+def test_enqueue_fills_every_placeholder_and_replaces_the_same_pair(tmp_path):
     template = tmp_path / "convert_summer.md"
     text = (
         "Vstup `{SOURCE_IMAGE}`, výstup `{DESTINATION_IMAGE}`.\r\n"
@@ -47,18 +59,18 @@ def test_enqueue_fills_every_placeholder_and_keeps_the_text(tmp_path):
     source = tmp_path / "anim" / "frame0" / "render.png"
     queue = tmp_path / "queue"
 
-    first = enqueue(template, source, queue, now=NOW)
-    second = enqueue(template, source, queue, now=NOW)
+    first = enqueue(template, source, queue)
+    second = enqueue(template, source, queue)
 
-    assert first.name == "prompt-2026-11-24-07-05-09.md"
-    assert second.name == "prompt-2026-11-24-07-05-09-2.md"
+    assert first == second
+    assert first.name == queue_file_name(source, template)
     destination = source.with_name("render-photo.png")
     assert first.read_bytes().decode("utf-8") == (
         f"Vstup `{source}`, výstup `{destination}`.\r\nPo uložení `{destination}` skonči.\n"
     )
-    assert {p.name for p in queue.iterdir()} == {first.name, second.name}  # no temp file
+    assert [p.name for p in queue.iterdir()] == [first.name]  # no temp file, no duplicate
 
 
 def test_enqueue_missing_template_raises(tmp_path):
     with pytest.raises(OSError):
-        enqueue(tmp_path / "missing.md", tmp_path / "render.png", tmp_path / "queue", now=NOW)
+        enqueue(tmp_path / "missing.md", tmp_path / "render.png", tmp_path / "queue")

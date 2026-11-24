@@ -3,7 +3,9 @@
 The templates are the ``*.md`` files in ``assets/prompts`` of the repository. A template
 names the input image ``{SOURCE_IMAGE}`` and the output image ``{DESTINATION_IMAGE}``;
 both are replaced with absolute paths, and the result is written to
-``prompt_queue/prompt-YYYY-MM-DD-HH-MM-SS.md`` for another program to pick up.
+``prompt_queue/<hash>.md`` for another program to pick up. The hash is the first 16 hex
+characters of the SHA-256 of ``<absolute render.png path>,<absolute template path>``,
+so the same image with the same prompt always gets the same queue file.
 
 This module (with ``layer_presets.py``) is the only place where layer names matter; see
 CLAUDE.md.
@@ -11,8 +13,8 @@ CLAUDE.md.
 
 from __future__ import annotations
 
+import hashlib
 import os
-from datetime import datetime
 from pathlib import Path
 
 from ai_mod_painter.core.layer_presets import RENDER_LAYER
@@ -27,6 +29,7 @@ DESTINATION_PLACEHOLDER = "{DESTINATION_IMAGE}"
 PROMPT_EXTENSION = ".md"
 SOURCE_LAYER = RENDER_LAYER
 DESTINATION_SUFFIX = "-photo"
+HASH_LENGTH = 16
 
 
 def list_prompts(folder: Path = PROMPTS_DIR) -> list[Path]:
@@ -55,35 +58,29 @@ def fill_template(text: str, source: Path, destination: Path) -> str:
     )
 
 
-def queue_file_name(now: datetime, number: int = 1) -> str:
-    """``prompt-YYYY-MM-DD-HH-MM-SS.md``; ``-2``, ``-3``, … for more in the same second."""
-    base = now.strftime("prompt-%Y-%m-%d-%H-%M-%S")
-    suffix = "" if number == 1 else f"-{number}"
-    return f"{base}{suffix}{PROMPT_EXTENSION}"
+def queue_file_name(source: Path, template: Path) -> str:
+    """``<16 hex>.md`` from SHA-256 of ``"<source>,<template>"`` (both absolute paths)."""
+    key = f"{os.path.abspath(source)},{os.path.abspath(template)}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return f"{digest[:HASH_LENGTH]}{PROMPT_EXTENSION}"
 
 
-def enqueue(
-    template: Path,
-    source: Path,
-    queue_dir: Path = QUEUE_DIR,
-    now: datetime | None = None,
-) -> Path:
+def enqueue(template: Path, source: Path, queue_dir: Path = QUEUE_DIR) -> Path:
     """Fill ``template`` for the image ``source`` and write it into ``queue_dir``.
 
-    The file appears atomically (written under a temporary name first). Returns its
-    path. Raises ``OSError`` or ``UnicodeDecodeError`` when the template cannot be read
-    or the queue file cannot be written.
+    The same ``source`` and ``template`` give the same file name, so a second call
+    replaces the earlier file. The file appears atomically (written under a temporary
+    name first). Returns its path. Raises ``OSError`` or ``UnicodeDecodeError`` when
+    the template cannot be read or the queue file cannot be written.
     """
     source = Path(os.path.abspath(source))
-    text = Path(template).read_bytes().decode("utf-8")
+    template = Path(os.path.abspath(template))
+    text = template.read_bytes().decode("utf-8")
     filled = fill_template(text, source, destination_for(source))
 
     queue_dir = Path(queue_dir)
     queue_dir.mkdir(parents=True, exist_ok=True)
-    now = now or datetime.now()
-    number = 1
-    while (target := queue_dir / queue_file_name(now, number)).exists():
-        number += 1
+    target = queue_dir / queue_file_name(source, template)
     temp = queue_dir / f".{target.name}.tmp"
     temp.write_bytes(filled.encode("utf-8"))
     os.replace(temp, target)
