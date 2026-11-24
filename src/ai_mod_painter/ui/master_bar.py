@@ -1,9 +1,20 @@
-"""The bar above the image: panel toggles, Play / Stop, the frame slider and its label."""
+"""The bar above the image: panel toggles, Play / Stop, the frame slider, the prompt queue."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QToolButton, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QToolButton,
+    QWidget,
+)
 
 SLIDER_MAX_WIDTH = 200
 
@@ -11,6 +22,8 @@ SLIDER_MAX_WIDTH = 200
 class MasterBar(QWidget):
     frame_changed = Signal(int)
     play_toggled = Signal(bool)
+    prompt_changed = Signal()
+    add_clicked = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -38,6 +51,17 @@ class MasterBar(QWidget):
         self.label = QLabel()
         self.label.setMinimumWidth(120)
 
+        self.prompt_combo = QComboBox()
+        self.prompt_combo.setToolTip("Prompt template from assets/prompts")
+        self.prompt_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.prompt_combo.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.prompt_combo.currentIndexChanged.connect(lambda _index: self.prompt_changed.emit())
+        self.add_button = QPushButton("Add")
+        self.add_button.setToolTip(
+            "Add the chosen prompt for render.png of this frame to the prompt queue"
+        )
+        self.add_button.clicked.connect(self.add_clicked)
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
@@ -46,9 +70,26 @@ class MasterBar(QWidget):
         layout.addWidget(self.slider, 1)
         layout.addWidget(self.label)
         layout.addStretch(1)
+        layout.addWidget(self.prompt_combo)
+        layout.addWidget(self.add_button)
         layout.addWidget(self.right_toggle)
         self._update_play_text(False)
         self.set_frames([])
+
+    def set_prompts(self, prompts: list[Path], select: str | None = None) -> None:
+        """Fill the prompt combo (file names without ``.md``), keeping or choosing ``select``."""
+        keep = select if select is not None else self.prompt_combo.currentText()
+        self.prompt_combo.blockSignals(True)
+        self.prompt_combo.clear()
+        for path in prompts:
+            self.prompt_combo.addItem(path.stem, path)
+        index = self.prompt_combo.findText(keep)
+        self.prompt_combo.setCurrentIndex(index if index >= 0 else (0 if prompts else -1))
+        self.prompt_combo.blockSignals(False)
+        self.prompt_changed.emit()
+
+    def selected_prompt(self) -> Path | None:
+        return self.prompt_combo.currentData()
 
     def set_frames(self, names: list[str]) -> None:
         self._names = list(names)

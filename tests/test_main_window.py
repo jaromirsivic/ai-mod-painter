@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication
 
+from ai_mod_painter.core.review import CONFIG_NAME, read_approved
+from ai_mod_painter.ui.animation_panel import thumb_rect, trash_rect
 from ai_mod_painter.ui.image_view import MAX_ZOOM, MIN_ZOOM
+from ai_mod_painter.ui.layers_panel import CUSTOM_MODE, DEFAULT_MODE
 from ai_mod_painter.ui.main_window import MainWindow
 from tests.conftest import make_image
 
@@ -14,8 +19,12 @@ GREEN = (0, 255, 0, 255)
 
 
 @pytest.fixture
-def window(qtbot, settings):
-    win = MainWindow(settings=settings)
+def window(qtbot, settings, tmp_path):
+    win = MainWindow(
+        settings=settings,
+        prompts_dir=tmp_path / "prompts",
+        queue_dir=tmp_path / "queue",
+    )
     qtbot.addWidget(win)
     win.resize(1200, 800)
     win.show()
@@ -132,18 +141,6 @@ def test_layer_toggle_by_clicking_the_icons(qtbot, window, make_tree):
     qtbot.waitUntil(lambda: window.shown_index == 0 and pixel(window, 0, 0) == BLUE)
 
 
-def test_layer_state_carries_over_to_next_animation(qtbot, window, make_tree):
-    root = frame_tree(make_tree, name="a1")
-    frame_tree(make_tree, name="a2")
-    open_first(qtbot, window, root)
-    window.layers.set_visible("top.png", False)
-
-    with qtbot.waitSignal(window.animation_loaded, timeout=5000):
-        window.animations.select_row(1)
-    states = {s.key: s.visible for s in window.layers.states()}
-    assert states == {"base.png": True, "top.png": False}
-
-
 def test_animation_without_images(qtbot, window, make_tree):
     root = make_tree({"empty/frame0/scene.json": "{}"})
     assert window.open_root(root)
@@ -176,17 +173,6 @@ def test_playback_holds_a_frame_that_is_not_decoded(qtbot, window, make_tree):
     window._shown_index = None  # pretend the current frame is still decoding
     window._on_tick()
     assert window.frame_index == 0
-
-
-def test_playback_runs_on_the_timer_and_stops_on_animation_switch(qtbot, window, make_tree):
-    root = frame_tree(make_tree, name="a1")
-    frame_tree(make_tree, name="a2")
-    open_first(qtbot, window, root)
-    window.play()
-    qtbot.waitUntil(lambda: window.frame_index == 2, timeout=5000)
-    with qtbot.waitSignal(window.animation_loaded, timeout=5000):
-        window.animations.select_row(1)
-    assert not window.is_playing()
 
 
 def test_reload_picks_up_new_frames(qtbot, window, make_tree, tmp_path):
@@ -241,3 +227,235 @@ def test_zoom_is_clamped(window):
     view.set_zoom(1)
     view.zoom_by_steps(4)
     assert view.zoom() == pytest.approx(2.0)
+
+
+# --- frame position and playback across animations --------------------------------------
+
+
+def switch_to(qtbot, window, row):
+    with qtbot.waitSignal(window.animation_loaded, timeout=5000):
+        window.animations.select_row(row)
+    qtbot.waitUntil(lambda: window.shown_index == window.frame_index, timeout=5000)
+
+
+def test_frame_position_is_kept_when_the_next_animation_has_enough_frames(qtbot, window, make_tree):
+    root = frame_tree(make_tree, frames=3, name="a1")
+    frame_tree(make_tree, frames=5, name="a2")
+    frame_tree(make_tree, frames=2, name="a3")
+    open_first(qtbot, window, root)
+    window.master.slider.setValue(2)
+    qtbot.waitUntil(lambda: window.shown_index == 2, timeout=5000)
+
+    switch_to(qtbot, window, 1)  # 5 frames: stays on the third frame
+    assert window.frame_index == 2
+    assert window.master.label.text() == "frame2  (3 / 5)"
+
+    switch_to(qtbot, window, 2)  # 2 frames: back to the first frame
+    assert window.frame_index == 0
+
+
+def test_playback_keeps_running_on_animation_switch(qtbot, window, make_tree):
+    root = frame_tree(make_tree, name="a1")
+    frame_tree(make_tree, name="a2")
+    open_first(qtbot, window, root)
+    window.play()
+    switch_to(qtbot, window, 1)
+    assert window.is_playing()
+    assert window.animation.name == "a2"
+
+
+# --- layer modes ------------------------------------------------------------------------
+
+
+def preset_tree(make_tree, names=("a1", "a2")):
+    spec: dict[str, object] = {}
+    for name in names:
+        for file_name in ("render.png", "render_scene.png", "Render_Aircraft.png", "extra.png"):
+            spec[f"{name}/frame0/{file_name}"] = {"size": (8, 4)}
+    return make_tree(spec)
+
+
+def test_default_preset_on_open_and_custom_after_a_change(qtbot, window, make_tree):
+    open_first(qtbot, window, preset_tree(make_tree))
+    states = window.layers.states()
+    assert [s.key for s in states][:2] == ["render_scene.png", "render.png"]
+    assert {s.key: (s.visible, s.red) for s in states} == {
+        "render_scene.png": (False, False),
+        "render.png": (True, False),
+        "render_aircraft.png": (False, True),
+        "extra.png": (True, False),
+    }
+    assert window.layers.mode() == DEFAULT_MODE
+
+    window.layers.set_visible("extra.png", False)
+    assert window.layers.mode() == CUSTOM_MODE
+
+    switch_to(qtbot, window, 1)  # another animation: Default again
+    assert window.layers.mode() == DEFAULT_MODE
+    assert {s.key: s.visible for s in window.layers.states()}["extra.png"] is True
+
+
+def test_clicking_an_eye_switches_to_custom(qtbot, window, make_tree):
+    open_first(qtbot, window, preset_tree(make_tree))
+    view = window.layers.list_widget
+    rect = view.visualItemRect(view.item(0))
+    eye = QPoint(rect.left() + 13, rect.center().y())
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=eye)
+    assert window.layers.mode() == CUSTOM_MODE
+
+
+def test_reorder_switches_to_custom_and_default_applies_the_preset_again(qtbot, window, make_tree):
+    open_first(qtbot, window, preset_tree(make_tree))
+    window.layers.move_to_row("render_scene.png", 0)
+    qtbot.waitUntil(lambda: window.layers.mode() == CUSTOM_MODE, timeout=5000)
+    assert window.layers.states()[-1].key == "render_scene.png"
+
+    window.layers.mode_combo.activated.emit(0)  # the user picks Default
+    assert window.layers.mode() == DEFAULT_MODE
+    assert window.layers.states()[0].key == "render_scene.png"
+
+
+def test_reload_keeps_the_custom_layer_setup(qtbot, window, make_tree):
+    open_first(qtbot, window, preset_tree(make_tree))
+    window.layers.set_visible("extra.png", False)
+    with qtbot.waitSignal(window.animation_loaded, timeout=5000):
+        window.reload()
+    assert {s.key: s.visible for s in window.layers.states()}["extra.png"] is False
+    assert window.layers.mode() == CUSTOM_MODE
+
+
+# --- prompt queue -----------------------------------------------------------------------
+
+
+def write_prompt(tmp_path, name="convert_summer", text="in {SOURCE_IMAGE} out {DESTINATION_IMAGE}"):
+    folder = tmp_path / "prompts"
+    folder.mkdir(exist_ok=True)
+    (folder / f"{name}.md").write_text(text, encoding="utf-8")
+
+
+def test_add_queues_the_filled_prompt_for_render_png(qtbot, window, make_tree, tmp_path):
+    write_prompt(tmp_path)
+    write_prompt(tmp_path, name="convert_winter")
+    window.load_prompts()
+    combo = window.master.prompt_combo
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "convert_summer",
+        "convert_winter",
+    ]
+    root = make_tree(
+        {"a1/frame0/render.png": {"size": (8, 4)}, "a1/frame1/other.png": {"size": (8, 4)}}
+    )
+    assert not window.master.add_button.isEnabled()  # no animation yet
+    open_first(qtbot, window, root)
+    assert window.master.add_button.isEnabled()
+
+    window.master.add_button.click()
+    queued = list((tmp_path / "queue").glob("prompt-*.md"))
+    assert len(queued) == 1
+    source = root / "a1" / "frame0" / "render.png"
+    destination = source.with_name("render-photo.png")
+    assert queued[0].read_text(encoding="utf-8") == f"in {source} out {destination}"
+    assert "Queued convert_summer for a1/frame0" in window.message_label.text()
+
+    window.master.slider.setValue(1)  # frame1 has no render.png
+    assert not window.master.add_button.isEnabled()
+
+
+def test_add_is_disabled_without_prompts(qtbot, window, make_tree):
+    window.load_prompts()
+    open_first(qtbot, window, make_tree({"a1/frame0/render.png": {"size": (8, 4)}}))
+    assert window.master.prompt_combo.count() == 0
+    assert not window.master.add_button.isEnabled()
+
+
+# --- review: approve, mark, delete, reload ----------------------------------------------
+
+
+def click_icon(qtbot, panel, row, rect_of):
+    view = panel.list_widget
+    rect = rect_of(view.visualItemRect(view.item(row)))
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+
+
+def test_approve_writes_the_config_and_is_read_back(qtbot, window, make_tree):
+    root = make_tree({"a1/": None, "a2/": None})
+    assert window.open_root(root)
+    panel = window.animations
+
+    click_icon(qtbot, panel, 0, thumb_rect)
+    assert read_approved(root / "a1")
+    assert panel.is_approved(root / "a1")
+    assert not panel.is_approved(root / "a2")
+    assert panel.selected_animation() is None  # an icon click does not open the animation
+
+    assert window.open_root(root)  # read back from the file
+    assert panel.is_approved(root / "a1")
+
+    click_icon(qtbot, panel, 0, thumb_rect)
+    assert not panel.is_approved(root / "a1")
+    config = json.loads((root / "a1" / CONFIG_NAME).read_text(encoding="utf-8"))
+    assert config == {"approved": False}
+
+
+def test_trash_marks_and_approve_clears_the_mark(qtbot, window, make_tree):
+    root = make_tree({"a1/": None, "a2/": None})
+    assert window.open_root(root)
+    panel = window.animations
+    assert not panel.delete_button.isEnabled()
+
+    click_icon(qtbot, panel, 1, trash_rect)
+    assert panel.is_marked(root / "a2")
+    assert panel.delete_button.isEnabled()
+    assert panel.delete_button.text() == "Delete Selected (1)"
+    assert not (root / "a2" / CONFIG_NAME).exists()  # marking writes nothing
+
+    click_icon(qtbot, panel, 1, thumb_rect)
+    assert not panel.is_marked(root / "a2")
+    assert panel.is_approved(root / "a2")
+    assert not panel.delete_button.isEnabled()
+
+
+def test_delete_selected_asks_and_deletes_only_the_marked_folders(
+    qtbot, window, make_tree, monkeypatch
+):
+    root = frame_tree(make_tree, name="a1")
+    frame_tree(make_tree, name="a2")
+    make_tree({"a3/frame0/scene.json": "{}"})
+    open_first(qtbot, window, root)  # a1 is open
+    panel = window.animations
+    click_icon(qtbot, panel, 0, trash_rect)
+    click_icon(qtbot, panel, 2, trash_rect)
+
+    asked = []
+    monkeypatch.setattr(window, "_confirm_delete", lambda count: asked.append(count) or False)
+    panel.delete_button.click()
+    assert asked == [2]
+    assert (root / "a1").exists() and (root / "a3").exists()
+
+    monkeypatch.setattr(window, "_confirm_delete", lambda count: True)
+    panel.delete_button.click()
+    assert not (root / "a1").exists()
+    assert not (root / "a3").exists()
+    assert (root / "a2").exists()
+    assert window.animation is None  # the open animation was closed first
+    assert [p.name for p in panel.animations] == ["a2"]
+    assert not panel.delete_button.isEnabled()
+    assert window.message_label.text() == "Deleted 2 animation folders"
+
+
+def test_reload_button_goes_to_page_one_and_clears_marks_f5_keeps_both(qtbot, window, make_tree):
+    root = make_tree({f"anim{i}/": None for i in range(150)})
+    assert window.open_root(root)
+    panel = window.animations
+    panel.set_page(1)
+    panel.toggle_marked(root / "anim120")
+    make_tree({"anim150/": None})
+
+    window.reload()  # F5
+    assert panel.current_page == 1
+    assert panel.is_marked(root / "anim120")
+    assert len(panel.animations) == 151
+
+    panel.reload_button.click()
+    assert panel.current_page == 0
+    assert not panel.marked_animations()

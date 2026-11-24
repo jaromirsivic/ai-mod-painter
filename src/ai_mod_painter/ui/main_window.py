@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -19,12 +20,24 @@ from PySide6.QtWidgets import (
 from ai_mod_painter import APP_NAME
 from ai_mod_painter.core.compositor import canvas_layer, compose, needed_paths, straight_color
 from ai_mod_painter.core.image_cache import ImageCache
-from ai_mod_painter.core.layer_state import LayerMemory, LayerState
+from ai_mod_painter.core.layer_presets import default_preset, keep_states
+from ai_mod_painter.core.layer_state import LayerState
 from ai_mod_painter.core.library import Animation, scan_animation
+from ai_mod_painter.core.prompt_queue import (
+    PROMPTS_DIR,
+    QUEUE_DIR,
+    SOURCE_LAYER,
+    enqueue,
+    list_prompts,
+)
+from ai_mod_painter.core.review import delete_folder
 from ai_mod_painter.ui.animation_panel import AnimationPanel
 from ai_mod_painter.ui.image_view import ImageView, format_zoom
-from ai_mod_painter.ui.layers_panel import LayersPanel
+from ai_mod_painter.ui.layers_panel import DEFAULT_MODE, LayersPanel
 from ai_mod_painter.ui.master_bar import MasterBar
+
+ERROR_COLOR = "#c0392b"
+INFO_COLOR = "#2e9e4f"
 
 FPS = 10
 FRAME_INTERVAL_MS = 1000 // FPS
@@ -59,10 +72,14 @@ class MainWindow(QMainWindow):
         self,
         settings: QSettings | None = None,
         cache: ImageCache | None = None,
+        prompts_dir: Path = PROMPTS_DIR,
+        queue_dir: Path = QUEUE_DIR,
     ) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self._settings = settings if settings is not None else QSettings()
+        self._prompts_dir = Path(prompts_dir)
+        self._queue_dir = Path(queue_dir)
         self.cache = cache if cache is not None else ImageCache(parent=self)
         self.cache.image_loaded.connect(self._on_image_loaded)
 
@@ -71,7 +88,6 @@ class MainWindow(QMainWindow):
         self._shown_index: int | None = None
         self._image: QImage | None = None
         self._fit_pending = False
-        self._memory = LayerMemory()
         self._scan_token = 0
         self._scan_pool = QThreadPool(self)
         self._scan_pool.setMaxThreadCount(1)
@@ -93,12 +109,16 @@ class MainWindow(QMainWindow):
     def _build_widgets(self) -> None:
         self.animations = AnimationPanel()
         self.animations.root_opened.connect(self._on_root_opened)
-        self.animations.root_failed.connect(self._show_error)
+        self.animations.error.connect(self._show_error)
         self.animations.animation_selected.connect(self.open_animation)
+        self.animations.reload_clicked.connect(self.reload_all)
+        self.animations.delete_clicked.connect(self.delete_marked)
 
         self.master = MasterBar()
         self.master.frame_changed.connect(self.set_frame)
         self.master.play_toggled.connect(self._on_play_toggled)
+        self.master.prompt_changed.connect(self._update_add_button)
+        self.master.add_clicked.connect(self.add_prompt)
 
         self.view = ImageView()
         self.view.zoom_changed.connect(self._on_zoom_changed)
@@ -108,7 +128,6 @@ class MainWindow(QMainWindow):
         self.zoom_label = QLabel()
         self.pixel_label = QLabel()
         self.message_label = QLabel()
-        self.message_label.setStyleSheet("color: #c0392b;")
         status = QHBoxLayout()
         status.setContentsMargins(6, 2, 6, 2)
         status.setSpacing(16)
@@ -130,6 +149,7 @@ class MainWindow(QMainWindow):
 
         self.layers = LayersPanel()
         self.layers.changed.connect(self._on_layers_changed)
+        self.layers.default_requested.connect(self.apply_default_preset)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(self.animations)
@@ -258,8 +278,6 @@ class MainWindow(QMainWindow):
 
     def _close_animation(self) -> None:
         self.stop()
-        if self._animation is not None:
-            self._memory.remember(self.layers.states())
         self._scan_token += 1
         self._animation = None
         self._index = 0
@@ -269,10 +287,14 @@ class MainWindow(QMainWindow):
         self.layers.set_layers([])
         self.view.set_image(None)
         self._update_status()
+        self._update_add_button()
 
     def open_animation(self, path: Path) -> None:
-        """Scan the animation on a worker thread, then show its first frame."""
-        self.stop()
+        """Scan the animation on a worker thread, then show it.
+
+        Playback keeps running. The frame number stays when the new animation has that
+        many frames; otherwise it starts at the first frame.
+        """
         self._scan_token += 1
         token = self._scan_token
         self.view.set_message(f"Loading {Path(path).name}…")
@@ -281,6 +303,48 @@ class MainWindow(QMainWindow):
     def reload(self) -> None:
         """F5: list the root again and rescan the open animation (new frames and files)."""
         self.animations.reload_root()
+        self._rescan_open()
+        self.load_prompts()
+
+    def reload_all(self) -> None:
+        """The Reload button: like F5, but clears the deletion marks and goes to page 1."""
+        self.animations.reload_all()
+        self._rescan_open()
+        self.load_prompts()
+
+    def delete_marked(self) -> None:
+        """Delete Selected: after a confirmation, permanently delete the marked animations."""
+        marked = self.animations.marked_animations()
+        if not marked or not self._confirm_delete(len(marked)):
+            return
+        if self._animation is not None and self._animation.path in marked:
+            self._close_animation()
+            self.view.set_message("Choose an animation on the left")
+        failed = []
+        for path in marked:
+            try:
+                delete_folder(path)
+            except OSError as error:
+                failed.append(f"{path.name} ({error.strerror or error})")
+        self.animations.reload_root()
+        if failed:
+            self._show_error("Cannot delete " + ", ".join(failed))
+        else:
+            count = len(marked)
+            self._show_info(f"Deleted {count} animation folder{'s' if count != 1 else ''}")
+
+    def _confirm_delete(self, count: int) -> bool:
+        folders = f"{count} animation folder{'s' if count != 1 else ''}"
+        answer = QMessageBox.question(
+            self,
+            "Delete Selected",
+            f"Permanently delete {folders}?\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _rescan_open(self) -> None:
         if self._animation is not None:
             self._scan_token += 1
             token = self._scan_token
@@ -297,15 +361,21 @@ class MainWindow(QMainWindow):
             return
 
         reloading = self._animation is not None and self._animation.path == animation.path
-        if self._animation is not None:
-            self._memory.remember(self.layers.states())
-        previous_frame = self._animation.frames[self._index].name if reloading else None
+        previous_frame = (
+            self._animation.frames[self._index].name
+            if reloading and self._animation.frames
+            else None
+        )
+        previous_index = self._index
 
         self._animation = animation
         self.message_label.setText("")
-        states = self._memory.apply(animation.layers)
-        counts = {layer.key: layer.frame_count for layer in animation.layers}
-        self.layers.set_layers(states, counts, len(animation.frames))
+        preset = default_preset(animation.layers)
+        if reloading:
+            self._set_layer_states(keep_states(self.layers.states(), preset))
+        else:
+            self._set_layer_states(preset)
+            self.layers.set_mode(DEFAULT_MODE)
         self.master.set_frames([f.name for f in animation.frames])
         self._shown_index = None
 
@@ -315,14 +385,17 @@ class MainWindow(QMainWindow):
             self.view.set_image(None)
             self.view.set_message("No images in this animation")
             self._update_status()
+            self._update_add_button()
             self.animation_loaded.emit()
             return
 
         index = 0
-        if previous_frame is not None:
+        if reloading:
             names = [f.name for f in animation.frames]
             if previous_frame in names:
                 index = names.index(previous_frame)
+        elif 0 <= previous_index < len(animation.frames):
+            index = previous_index
         self._fit_pending = not reloading
         self.view.set_message("")
         self._index = -1
@@ -332,6 +405,19 @@ class MainWindow(QMainWindow):
     @property
     def animation(self) -> Animation | None:
         return self._animation
+
+    def _set_layer_states(self, states: list[LayerState]) -> None:
+        assert self._animation is not None
+        counts = {layer.key: layer.frame_count for layer in self._animation.layers}
+        self.layers.set_layers(states, counts, len(self._animation.frames))
+
+    def apply_default_preset(self) -> None:
+        """Choosing Default in the layers combo: the preset again for the open animation."""
+        self.layers.set_mode(DEFAULT_MODE)
+        if self._animation is None:
+            return
+        self._set_layer_states(default_preset(self._animation.layers))
+        self._on_layers_changed()
 
     # --- frames ------------------------------------------------------------------------
 
@@ -356,6 +442,7 @@ class MainWindow(QMainWindow):
             return
         self._index = index
         self.master.set_frame(index)
+        self._update_add_button()
         self._refresh()
 
     def step(self, delta: int) -> None:
@@ -452,6 +539,39 @@ class MainWindow(QMainWindow):
             return  # the current frame is still decoding: hold it, never skip
         self.set_frame((self._index + 1) % len(self._animation.frames))
 
+    # --- prompt queue ------------------------------------------------------------------
+
+    def load_prompts(self) -> None:
+        self.master.set_prompts(list_prompts(self._prompts_dir))
+
+    def _prompt_source(self) -> Path | None:
+        """``render.png`` of the current frame, if the frame has one."""
+        if self._animation is None or not 0 <= self._index < len(self._animation.frames):
+            return None
+        return self._animation.frames[self._index].files.get(SOURCE_LAYER)
+
+    def _update_add_button(self) -> None:
+        source = self._prompt_source()
+        self.master.add_button.setEnabled(
+            source is not None and self.master.selected_prompt() is not None
+        )
+
+    def add_prompt(self) -> None:
+        """Add: fill the chosen template for this frame's ``render.png`` into the queue."""
+        source = self._prompt_source()
+        template = self.master.selected_prompt()
+        if source is None or template is None or self._animation is None:
+            return
+        frame = self._animation.frames[self._index]
+        try:
+            queued = enqueue(template, source, self._queue_dir)
+        except (OSError, UnicodeDecodeError) as error:
+            self._show_error(f"Cannot add the prompt {template.stem}: {error}")
+            return
+        self._show_info(
+            f"Queued {template.stem} for {self._animation.name}/{frame.name} as {queued.name}"
+        )
+
     # --- status ------------------------------------------------------------------------
 
     def _update_status(self) -> None:
@@ -479,6 +599,11 @@ class MainWindow(QMainWindow):
         )
 
     def _show_error(self, message: str) -> None:
+        self.message_label.setStyleSheet(f"color: {ERROR_COLOR};")
+        self.message_label.setText(message)
+
+    def _show_info(self, message: str) -> None:
+        self.message_label.setStyleSheet(f"color: {INFO_COLOR};")
         self.message_label.setText(message)
 
     # --- settings ----------------------------------------------------------------------
@@ -496,6 +621,9 @@ class MainWindow(QMainWindow):
             self._settings.value("show_animations", True, type=bool)
         )
         self.show_layers_action.setChecked(self._settings.value("show_layers", True, type=bool))
+        self.master.set_prompts(
+            list_prompts(self._prompts_dir), self._settings.value("prompt", "", type=str)
+        )
 
     def restore_root(self) -> None:
         root = self._settings.value("root", "", type=str)
@@ -510,6 +638,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue("splitter", self.splitter.saveState())
         self._settings.setValue("show_animations", self.show_animations_action.isChecked())
         self._settings.setValue("show_layers", self.show_layers_action.isChecked())
+        self._settings.setValue("prompt", self.master.prompt_combo.currentText())
         self._scan_pool.clear()
         self._scan_pool.waitForDone()
         self.cache.shutdown()

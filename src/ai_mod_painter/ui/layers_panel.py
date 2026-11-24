@@ -2,6 +2,10 @@
 
 Each row has an eye toggle (show / hide), a red toggle (red mask) and the file name.
 Rows are reordered by drag and drop.
+
+The combo box next to the title shows the mode: Default (the preset of
+``core/layer_presets.py``) or Custom. Any change by the user (eye, R, order) switches it
+to Custom; choosing Default asks for the preset again (``default_requested``).
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ from PySide6.QtCore import QEvent, QModelIndex, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -28,6 +34,10 @@ KEY_ROLE = Qt.ItemDataRole.UserRole + 1
 VISIBLE_ROLE = Qt.ItemDataRole.UserRole + 2
 RED_ROLE = Qt.ItemDataRole.UserRole + 3
 PRESENT_ROLE = Qt.ItemDataRole.UserRole + 4
+
+DEFAULT_MODE = "default"
+CUSTOM_MODE = "custom"
+MODES = ((DEFAULT_MODE, "Default"), (CUSTOM_MODE, "Custom"))
 
 ROW_HEIGHT = 26
 ICON = 18
@@ -155,11 +165,24 @@ class LayersPanel(QWidget):
     """``states()`` / ``set_layers()`` use bottom-first order; the list shows top first."""
 
     changed = Signal()
+    default_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._title = QLabel("Layers")
         self._title.setStyleSheet("font-weight: bold; padding: 4px 2px;")
+        self.mode_combo = QComboBox()
+        for mode, label in MODES:
+            self.mode_combo.addItem(label, mode)
+        self.mode_combo.setToolTip(
+            "Default: the preset layer set-up. Any change of a layer switches to Custom."
+        )
+        self.mode_combo.activated.connect(self._on_mode_activated)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(6)
+        title_row.addWidget(self._title)
+        title_row.addWidget(self.mode_combo)
+        title_row.addStretch(1)
         self._list = _LayerList(self)
         self._delegate = _LayerDelegate(self._list)
         self._list.setItemDelegate(self._delegate)
@@ -171,7 +194,7 @@ class LayersPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
-        layout.addWidget(self._title)
+        layout.addLayout(title_row)
         layout.addWidget(self._list, 1)
         layout.addWidget(self._hint)
 
@@ -189,6 +212,25 @@ class LayersPanel(QWidget):
     @property
     def list_widget(self) -> QListWidget:
         return self._list
+
+    # --- mode --------------------------------------------------------------------------
+
+    def mode(self) -> str:
+        return self.mode_combo.currentData()
+
+    def set_mode(self, mode: str) -> None:
+        """Show the mode without applying anything."""
+        index = self.mode_combo.findData(mode)
+        if index >= 0:
+            self.mode_combo.setCurrentIndex(index)
+
+    def _on_mode_activated(self, index: int) -> None:
+        if self.mode_combo.itemData(index) == DEFAULT_MODE:
+            self.default_requested.emit()
+
+    def _user_changed(self) -> None:
+        self.set_mode(CUSTOM_MODE)
+        self.changed.emit()
 
     # --- content -----------------------------------------------------------------------
 
@@ -273,14 +315,14 @@ class LayersPanel(QWidget):
         if bool(item.data(role)) == value:
             return
         item.setData(role, value)
-        self.changed.emit()
+        self._user_changed()
 
     def _on_toggled(self, index: QModelIndex, role: int) -> None:
         item = self._list.item(index.row())
         if item is None:
             return
         item.setData(role, not bool(item.data(role)))
-        self.changed.emit()
+        self._user_changed()
 
     def _schedule_emit(self, *args) -> None:
         if not self._loading:
@@ -290,4 +332,4 @@ class LayersPanel(QWidget):
         order = [s.key for s in self.states()]
         if order != self._last_order:
             self._last_order = order
-            self.changed.emit()
+            self._user_changed()

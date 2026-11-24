@@ -46,25 +46,43 @@ command.
   A frame folder without images is skipped.
 - A layer is identified by its file name, without regard to letter case. A layer that
   is missing from a frame is simply not drawn in that frame.
+- The app writes one file of its own into an animation folder: `ai-mod-config.json`
+  (`{"approved": true}`) when you approve the animation.
 
 ## Using it
 
 | Where | What |
 |---|---|
-| Left panel | A path box and a **…** button to choose the folder. Animations are listed 100 per page, with **‹ ›** to change pages. |
-| Bar above the image | **◧ / ◨** show or hide the side panels. **▶ / ■** plays the frames in a loop at 10 fps until Stop. The slider and its label show the current frame. |
+| Left panel | A path box and a **…** button to choose the folder. Animations are listed 100 per page, with **‹ ›** to change pages. Rows are gray; the **thumbs-up** at the end of a row approves the animation (green row, `ai-mod-config.json` is written; click again to take it back), the **trash** marks it for deletion (red row, nothing is deleted yet). **Reload** lists the folder again, clears the deletion marks and goes to page 1. **Delete Selected** asks once more and then deletes the marked animation folders **permanently** (no Recycle Bin). |
+| Bar above the image | **◧ / ◨** show or hide the side panels. **▶ / ■** plays the frames in a loop at 10 fps until Stop. The slider and its label show the current frame. On the right, the prompt combo and **Add** put a prompt into the queue (see below). |
 | Image | Mouse wheel zooms (1/64×–64×) around the cursor. Drag with the left or middle button to pan. |
-| Right panel | Layers, with the top row drawn on top. Drag a row to reorder. The **eye** shows or hides a layer, and **R** draws its opaque pixels red with their alpha kept, which works as a mask. Rows dim when the layer is missing from the current frame. |
+| Right panel | Layers, with the top row drawn on top. The combo next to the title shows **Default** or **Custom** (see below). Drag a row to reorder. The **eye** shows or hides a layer, and **R** draws its opaque pixels red with their alpha kept, which works as a mask. Rows dim when the layer is missing from the current frame. |
 | Status line | The canvas size (from the bottom-most layer), the zoom, and the pixel under the cursor (`x,y #RRGGBBAA`). |
 
 Defaults and rules:
 
-- **Default layer order:** the layer present in the most frames goes to the bottom,
-  and ties are ordered by name.
+- **Default layer set-up:** every animation opens in **Default**:
+  `render_scene.png` at the bottom (eye off), `render.png` above it (eye on), and all
+  other layers above, ordered by the number of frames they are in (most at the bottom,
+  ties by name); a layer with `aircraft` in its name gets **R** on and the eye off.
+  Without these names the layers simply follow the frame-count order, all visible.
+- **Custom:** any change of the eye, R or the order switches the combo to Custom.
+  Choosing Default applies the preset again. Opening another animation always returns
+  to Default; F5 and Reload keep the set-up of the open animation.
 - **Canvas size:** the bottom-most layer present in a frame gives the size. Other
   layers are stretched to it.
-- **Carry-over:** the layer set-up (order, eye, R) carries over to the next animation
-  with the same layer names. It is kept in memory only.
+- **Switching animations:** playback keeps running, and the frame number stays when
+  the new animation has that many frames; otherwise it starts at the first frame.
+
+### Prompt queue
+
+The combo on the right of the bar lists the templates in `assets/prompts/*.md` (file
+names without `.md`). **Add** is enabled when the current frame has `render.png`. It
+takes the chosen template, replaces `{SOURCE_IMAGE}` with the absolute path of that
+`render.png` and `{DESTINATION_IMAGE}` with `render-photo.png` in the same folder, and
+writes the result to `prompt_queue/prompt-YYYY-MM-DD-HH-MM-SS.md` in this repository
+(`-2`, `-3`, … when there are more in the same second). Another program processes the
+queue; the app only fills it.
 
 ### Shortcuts
 
@@ -74,7 +92,7 @@ Defaults and rules:
 | `,` / `.` | Previous / next frame |
 | F | Zoom to fit |
 | 1 | 100 % |
-| F5 | Reload (new animations, frames and files) |
+| F5 | Reload (new animations, frames, files and prompts; keeps the page and the deletion marks) |
 | Ctrl+O | Open folder |
 
 ## Development
@@ -87,7 +105,9 @@ uv run ruff format --check
 
 The source is in `src/ai_mod_painter`:
 
-- `core/` holds the folder model, the layer state, the compositor and the image cache.
+- `core/` holds the folder model, the layer state, the Default layer preset, the
+  review file and deletion, the prompt queue, the compositor and the image cache.
 - `ui/` holds the widgets.
 
-The design and the decisions behind it are in `implementation-plan.md`.
+The design and the decisions behind it are in `implementation-plan.md` and
+`implementation-plan-2.md`.

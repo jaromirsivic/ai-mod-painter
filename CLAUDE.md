@@ -13,6 +13,11 @@ Never depend on folder or image names of a particular render output. The app wor
 the shape root -> animation folders -> frame folders -> image files (PNG/JPG); every other
 file is ignored. See `src/ai_mod_painter/core/library.py`.
 
+Rules that depend on image names (`render_scene.png`, `render.png`, `aircraft`) live
+only in `core/layer_presets.py` and `core/prompt_queue.py`. The folder model stays
+universal, and the app must keep working on trees without these names (generic layer
+order, Add disabled).
+
 ## Checks
 
 ```

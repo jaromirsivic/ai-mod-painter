@@ -9,3 +9,6 @@ build/
 .ruff_cache/
 
 *.log
+
+# Filled prompts waiting for the image generator
+prompt_queue/
