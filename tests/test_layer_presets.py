@@ -35,6 +35,52 @@ def test_render_at_the_bottom_without_a_scene_and_names_keep_their_case():
     assert [s.name for s in states] == ["Render.PNG", "Render_AIRCRAFT.png"]
 
 
+def test_photo_right_above_render_and_visible():
+    states = default_preset(
+        layers(
+            "aircraft_aircraft-01_sun.png",
+            "render-photo.png",
+            "render.png",
+            "render_aircraft.png",
+            "extra.png",
+            "render_scene.png",
+        )
+    )
+    assert flags(states) == [
+        ("render_scene.png", False, False),
+        ("render.png", True, False),
+        ("render-photo.png", True, False),
+        ("aircraft_aircraft-01_sun.png", False, True),
+        ("render_aircraft.png", False, True),
+        ("extra.png", True, False),
+    ]
+
+
+def test_photo_without_render_sits_above_the_scene_and_keeps_its_case():
+    states = default_preset(layers("extra.png", "Render-Photo.PNG", "render_scene.png"))
+    assert flags(states) == [
+        ("render_scene.png", False, False),
+        ("render-photo.png", True, False),
+        ("extra.png", True, False),
+    ]
+    assert states[1].name == "Render-Photo.PNG"
+
+
+def test_photo_alone_goes_to_the_bottom():
+    states = default_preset(layers("extra.png", "render-photo.png"))
+    assert [s.key for s in states] == ["render-photo.png", "extra.png"]
+
+
+def test_a_new_photo_layer_lands_right_above_render_in_a_kept_setup():
+    preset = default_preset(layers("render.png", "render-photo.png", "render_aircraft.png"))
+    current = [LayerState("render.png", "render.png"), LayerState("render_aircraft.png", "x")]
+    assert [s.key for s in keep_states(current, preset)] == [
+        "render.png",
+        "render-photo.png",
+        "render_aircraft.png",
+    ]
+
+
 def test_tree_without_the_names_keeps_the_generic_order():
     states = default_preset(layers("base.png", "top.png"))
     assert flags(states) == [("base.png", True, False), ("top.png", True, False)]

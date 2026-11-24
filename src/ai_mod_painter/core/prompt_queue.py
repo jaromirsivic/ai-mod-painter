@@ -22,8 +22,8 @@ import hashlib
 import os
 from pathlib import Path
 
-from ai_mod_painter.core.layer_presets import RENDER_LAYER
-from ai_mod_painter.core.library import Animation, layer_key, natural_key
+from ai_mod_painter.core.layer_presets import PHOTO_LAYER, RENDER_LAYER
+from ai_mod_painter.core.library import Animation, natural_key
 
 PROJECT_DIR = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = PROJECT_DIR / "assets" / "prompts"
@@ -37,8 +37,6 @@ PROMPT_EXTENSION = ".md"
 SOURCE_LAYER = RENDER_LAYER
 DESTINATION_SUFFIX = "-photo"
 HASH_LENGTH = 16
-PHOTO_LAYER = layer_key(f"{Path(SOURCE_LAYER).stem}{DESTINATION_SUFFIX}{Path(SOURCE_LAYER).suffix}")
-"""``render-photo.png``: what the queue makes of ``render.png``."""
 
 
 def list_prompts(folder: Path = PROMPTS_DIR) -> list[Path]:

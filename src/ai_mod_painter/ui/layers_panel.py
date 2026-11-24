@@ -318,6 +318,14 @@ class LayersPanel(QWidget):
     def set_visible(self, key: str, visible: bool) -> None:
         self._set_role(key, VISIBLE_ROLE, visible)
 
+    def toggle_visible(self, key: str) -> bool:
+        """Flip the eye of a layer, as a click on it does; ``False`` without that row."""
+        row = self._row_of(key)
+        if row is None:
+            return False
+        self.set_visible(key, not bool(self._list.item(row).data(VISIBLE_ROLE)))
+        return True
+
     def set_red(self, key: str, red: bool) -> None:
         self._set_role(key, RED_ROLE, red)
 

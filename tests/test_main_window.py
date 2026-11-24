@@ -559,33 +559,145 @@ def test_left_and_right_step_through_the_frames_and_wrap(qtbot, window, make_tre
     assert window.frame_index == 1
 
 
-def test_a_and_d_act_on_the_selected_row(qtbot, window, make_tree):
+def selected_name(window):
+    return window.animations.selected_animation().name
+
+
+def test_a_and_d_act_on_the_selected_row_then_move_down(qtbot, window, make_tree):
+    root = make_tree({f"a{i}/": None for i in range(4)})
+    assert window.open_root(root)
+    panel = window.animations
+    target = window.layers.list_widget  # keys work wherever the focus is
+    a = [root / f"a{i}" for i in range(4)]
+
+    panel.select_row(0)
+    press(qtbot, target, Qt.Key.Key_A)  # grey -> green
+    assert row_state(panel, a[0]) == (True, False)
+    assert read_approved(a[0])
+    assert selected_name(window) == "a1"
+    press(qtbot, target, Qt.Key.Key_D)  # grey -> red
+    assert row_state(panel, a[1]) == (False, True)
+    assert selected_name(window) == "a2"
+
+    panel.select_row(0)
+    press(qtbot, target, Qt.Key.Key_D)  # green -> red
+    assert row_state(panel, a[0]) == (False, True)
+    assert not read_approved(a[0])
+    assert selected_name(window) == "a1"
+    press(qtbot, target, Qt.Key.Key_A)  # red -> green
+    assert row_state(panel, a[1]) == (True, False)
+    assert selected_name(window) == "a2"
+
+    panel.select_row(0)
+    press(qtbot, target, Qt.Key.Key_D)  # red -> grey
+    assert row_state(panel, a[0]) == (False, False)
+    assert selected_name(window) == "a1"
+    press(qtbot, target, Qt.Key.Key_A)  # green -> grey
+    assert row_state(panel, a[1]) == (False, False)
+    assert selected_name(window) == "a2"
+    assert row_state(panel, a[2]) == (False, False)
+
+    panel.select_row(3)  # the very last animation: acts and stays
+    press(qtbot, target, Qt.Key.Key_A)
+    assert row_state(panel, a[3]) == (True, False)
+    assert selected_name(window) == "a3"
+    press(qtbot, target, Qt.Key.Key_D)
+    assert row_state(panel, a[3]) == (False, True)
+    assert selected_name(window) == "a3"
+
+
+def test_a_and_d_move_on_to_the_next_page(qtbot, window, make_tree):
+    root = make_tree({f"anim{i}/": None for i in range(102)})
+    assert window.open_root(root)
+    panel = window.animations
+    target = window.layers.list_widget
+    panel.select_row(99)
+    press(qtbot, target, Qt.Key.Key_A)
+    assert read_approved(root / "anim99")  # the row is on page 1, no longer shown
+    assert panel.current_page == 1
+    assert selected_name(window) == "anim100"
+    panel.set_page(0)
+    panel.select_row(99)
+    press(qtbot, target, Qt.Key.Key_D)
+    assert panel.is_marked(root / "anim99")
+    assert panel.current_page == 1
+    assert selected_name(window) == "anim100"
+
+
+def test_a_and_d_without_a_selection_do_nothing(qtbot, window, make_tree):
+    root = make_tree({"a1/": None, "a2/": None})
+    assert window.open_root(root)
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_A)
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_D)
+    assert window.animations.selected_animation() is None
+    assert row_state(window.animations, root / "a1") == (False, False)
+
+
+def test_thumb_and_trash_buttons_do_not_move_the_selection(qtbot, window, make_tree):
     root = make_tree({"a1/": None, "a2/": None})
     assert window.open_root(root)
     panel = window.animations
-    panel.select_row(1)
-    a2 = root / "a2"
-    target = panel.list_widget
-
-    press(qtbot, target, Qt.Key.Key_A)
-    assert row_state(panel, a2) == (True, False)
-    assert read_approved(a2)
-    press(qtbot, target, Qt.Key.Key_D)
-    assert row_state(panel, a2) == (False, True)
-    press(qtbot, target, Qt.Key.Key_A)
-    assert row_state(panel, a2) == (True, False)
-    press(qtbot, target, Qt.Key.Key_A)
-    assert row_state(panel, a2) == (False, False)
-    assert row_state(panel, root / "a1") == (False, False)
+    panel.select_row(0)
+    click_icon(qtbot, panel, 0, thumb_rect)
+    assert selected_name(window) == "a1"
+    click_icon(qtbot, panel, 0, trash_rect)
+    assert selected_name(window) == "a1"
 
 
-def test_ctrl_space_adds_the_prompt(qtbot, window, make_tree, tmp_path):
+def visible(window):
+    return {s.key: s.visible for s in window.layers.states()}
+
+
+def aircraft_tree(make_tree):
+    spec = {f"a1/frame{i}/render.png": {"size": (8, 4), "color": BLUE} for i in range(2)}
+    spec["a1/frame0/Render_Aircraft.png"] = {"size": (8, 4), "color": GREEN}
+    spec.update({f"a2/frame{i}/render.png": {"size": (8, 4), "color": BLUE} for i in range(2)})
+    return make_tree(spec)
+
+
+def test_ctrl_space_shows_and_hides_render_aircraft(qtbot, window, make_tree, tmp_path):
     write_prompt(tmp_path)
     window.load_prompts()
-    open_first(qtbot, window, make_tree({"a1/frame0/render.png": {"size": (8, 4)}}))
+    open_first(qtbot, window, aircraft_tree(make_tree))
+    assert visible(window)["render_aircraft.png"] is False  # Default: hidden
+    before = visible(window)
+
     press(qtbot, window.layers.list_widget, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier)
-    assert len(list((tmp_path / "queue").iterdir())) == 1
+    assert visible(window) == {**before, "render_aircraft.png": True}
+    assert window.layers.mode() == CUSTOM_MODE
+    press(
+        qtbot, window.animations.list_widget, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier
+    )
+    assert visible(window) == before
+
+    assert queued(tmp_path) == []  # Ctrl+Space no longer adds a prompt
     assert window.is_playing() is False  # Ctrl+Space is not Play
+
+
+def test_ctrl_space_does_nothing_without_render_aircraft_in_the_frame(qtbot, window, make_tree):
+    open_first(qtbot, window, aircraft_tree(make_tree))
+    window.master.slider.setValue(1)  # a1 frame1 has no render_aircraft.png
+    qtbot.waitUntil(lambda: window.shown_index == 1, timeout=5000)
+    before = visible(window)
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier)
+    assert visible(window) == before
+    assert window.layers.mode() == DEFAULT_MODE
+
+    switch_to(qtbot, window, 1)  # a2 has no render_aircraft.png at all
+    before = visible(window)
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier)
+    assert visible(window) == before
+    assert window.layers.mode() == DEFAULT_MODE
+
+
+def test_ctrl_space_works_in_a_text_field(qtbot, window, make_tree):
+    open_first(qtbot, window, aircraft_tree(make_tree))
+    field = window.animations.findChild(QLineEdit)
+    text = field.text()
+    press(qtbot, field, Qt.Key.Key_Space, Qt.KeyboardModifier.ControlModifier)
+    assert visible(window)["render_aircraft.png"] is True
+    assert field.text() == text
+    assert window.is_playing() is False
 
 
 def test_text_field_keeps_arrows_and_letters(qtbot, window, make_tree):
@@ -707,6 +819,7 @@ def test_s_approves_and_adds_a_random_prompt_and_never_unapproves(
     assert second["approved_changed_at"] == first["approved_changed_at"]
     assert len(second["prompts"]) == 6
     assert len({p["prompt"] for p in second["prompts"]}) > 1  # random, not always the same
+    assert selected_name(window) == "a1"  # the very last animation: stays
 
 
 def test_s_takes_a_deletion_mark_away(qtbot, window, make_tree, tmp_path):
@@ -730,13 +843,43 @@ def test_s_without_render_png_only_approves(qtbot, window, make_tree, tmp_path):
     assert "no render.png" in window.message_label.text()
 
 
+def test_s_queues_for_the_shown_frame_then_moves_down(qtbot, window, make_tree, tmp_path):
+    write_prompt(tmp_path)
+    window.load_prompts()
+    root = render_tree(make_tree)
+    open_first(qtbot, window, root)
+    window.master.slider.setValue(2)
+    qtbot.waitUntil(lambda: window.shown_index == 2, timeout=5000)
+    with qtbot.waitSignal(window.animation_loaded, timeout=5000):
+        press(qtbot, window.layers.list_widget, Qt.Key.Key_S)
+    assert window.animations.is_approved(root / "a1")
+    assert not window.animations.is_approved(root / "a2")
+    assert selected_name(window) == "a2"
+    assert window.animation.name == "a2"
+    source = root / "a1" / "frame2" / "render.png"
+    template = tmp_path / "prompts" / "convert_summer.md"
+    assert queued(tmp_path) == [queue_file_name(source, template)]
+    assert [p["frame"] for p in config(root / "a1")["prompts"]] == ["frame2"]
+
+
+def test_s_moves_down_when_it_only_approves(qtbot, window, make_tree, tmp_path):
+    root = make_tree({"a1/frame0/other.png": {"size": (8, 4)}, "a2/": None, "a3/": None})
+    open_first(qtbot, window, root)
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_S)  # no prompts, no render.png
+    assert window.animations.is_approved(root / "a1")
+    assert selected_name(window) == "a2"
+    assert queued(tmp_path) == []
+
+
 def test_s_waits_until_the_selected_animation_is_loaded(qtbot, window, make_tree, tmp_path):
     write_prompt(tmp_path)
     window.load_prompts()
     root = render_tree(make_tree)
     open_first(qtbot, window, root)
     window.animations.select_row(1)  # a2 is selected, its scan has not come back yet
-    window.approve_and_add_random()
+    assert window.approve_and_add_random() is False
+    window.approve_add_and_next()  # S: nothing done, so no move either
+    assert selected_name(window) == "a2"
     assert not window.animations.is_approved(root / "a2")
     assert not window.animations.is_approved(root / "a1")
     assert queued(tmp_path) == []

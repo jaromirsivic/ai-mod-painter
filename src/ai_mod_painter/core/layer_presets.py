@@ -8,8 +8,11 @@ Default, bottom first:
 
 1. ``render_scene.png``: eye off, R off;
 2. ``render.png``: eye on, R off (at the bottom when there is no scene layer);
-3. every other layer in the library's default order; a layer whose name contains
+3. ``render-photo.png``: eye on, R off, right above ``render.png``;
+4. every other layer in the library's default order; a layer whose name contains
    ``aircraft`` gets R on and eye off, the others eye on and R off.
+
+Ctrl+Space shows or hides ``render_aircraft.png`` (:data:`AIRCRAFT_LAYER`).
 
 Names are compared without regard to letter case (layer keys are case-folded).
 """
@@ -23,6 +26,9 @@ from ai_mod_painter.core.library import Layer, layer_key
 
 SCENE_LAYER = layer_key("render_scene.png")
 RENDER_LAYER = layer_key("render.png")
+PHOTO_LAYER = layer_key("render-photo.png")
+"""What the prompt queue makes of ``render.png`` (see ``prompt_queue.py``)."""
+AIRCRAFT_LAYER = layer_key("render_aircraft.png")
 MASK_WORD = "aircraft"
 
 
@@ -34,8 +40,10 @@ def default_preset(layers: Sequence[Layer]) -> list[LayerState]:
         states.append(LayerState(SCENE_LAYER, by_key[SCENE_LAYER].name, visible=False))
     if RENDER_LAYER in by_key:
         states.append(LayerState(RENDER_LAYER, by_key[RENDER_LAYER].name))
+    if PHOTO_LAYER in by_key:
+        states.append(LayerState(PHOTO_LAYER, by_key[PHOTO_LAYER].name))
     for layer in layers:
-        if layer.key in (SCENE_LAYER, RENDER_LAYER):
+        if layer.key in (SCENE_LAYER, RENDER_LAYER, PHOTO_LAYER):
             continue
         masked = MASK_WORD in layer.key
         states.append(LayerState(layer.key, layer.name, visible=not masked, red=masked))

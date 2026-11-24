@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from ai_mod_painter import APP_NAME
 from ai_mod_painter.core.compositor import canvas_layer, compose, needed_paths, straight_color
 from ai_mod_painter.core.image_cache import ImageCache
-from ai_mod_painter.core.layer_presets import default_preset, keep_states
+from ai_mod_painter.core.layer_presets import AIRCRAFT_LAYER, default_preset, keep_states
 from ai_mod_painter.core.layer_state import LayerState
 from ai_mod_painter.core.library import Animation, scan_animation
 from ai_mod_painter.core.prompt_colors import color_of
@@ -638,27 +638,56 @@ class MainWindow(QMainWindow):
         self._update_marks()
         self._show_info(f"Queued {template.stem} for {where} as {queued.name}")
 
-    def approve_and_add_random(self) -> None:
+    def approve_and_add_random(self) -> bool:
         """S: approve the animation (never un-approve), then Add a random prompt.
 
         Does nothing while the selected animation is still loading, so the prompt can
-        never go to a frame of the animation shown before.
+        never go to a frame of the animation shown before. Returns ``True`` once the
+        animation is approved, also when no prompt could be added.
         """
         if self._animation is None:
-            return
+            return False
         if self.animations.selected_animation() != self._animation.path:
-            return
+            return False
         if not self.animations.approve_selected():
-            return
+            return False
         prompts = self.master.prompts()
         if not prompts:
             self._show_error(f"Approved; no prompts in {self._prompts_dir}")
-            return
+            return True
         if self._prompt_source() is None:
             self._show_error(f"Approved; no {SOURCE_LAYER} in this frame to add a prompt for")
-            return
+            return True
         self.master.select_prompt(self._rng.choice(prompts))
         self.add_prompt()
+        return True
+
+    def approve_add_and_next(self) -> None:
+        """S: :meth:`approve_and_add_random`, then the next animation (as ↓)."""
+        if self.approve_and_add_random():
+            self.animations.select_next(1)
+
+    def approve_and_next(self) -> None:
+        """A: approve or un-approve the selected animation, then the next one."""
+        if self.animations.selected_animation() is not None:
+            self.animations.toggle_approved_selected()
+            self.animations.select_next(1)
+
+    def mark_and_next(self) -> None:
+        """D: mark or unmark the selected animation for deletion, then the next one."""
+        if self.animations.selected_animation() is not None:
+            self.animations.toggle_marked_selected()
+            self.animations.select_next(1)
+
+    def toggle_aircraft_layer(self) -> None:
+        """Ctrl+Space: show or hide ``render_aircraft.png``, like a click on its eye.
+
+        Does nothing when the frame shown now has no such image.
+        """
+        if self._animation is None or not 0 <= self._index < len(self._animation.frames):
+            return
+        if AIRCRAFT_LAYER in self._animation.frames[self._index].files:
+            self.layers.toggle_visible(AIRCRAFT_LAYER)
 
     # --- keys ----------------------------------------------------------------------------
 
@@ -685,7 +714,7 @@ class MainWindow(QMainWindow):
         key = event.key()
         modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
         if key == Qt.Key.Key_Space and modifiers == Qt.KeyboardModifier.ControlModifier:
-            return self._add_from_key
+            return self.toggle_aircraft_layer
         if in_text_field or modifiers != Qt.KeyboardModifier.NoModifier:
             return None
         return {
@@ -693,14 +722,10 @@ class MainWindow(QMainWindow):
             Qt.Key.Key_Down: lambda: self.animations.select_next(1),
             Qt.Key.Key_Left: lambda: self.step(-1),
             Qt.Key.Key_Right: lambda: self.step(1),
-            Qt.Key.Key_A: self.animations.toggle_approved_selected,
-            Qt.Key.Key_D: self.animations.toggle_marked_selected,
-            Qt.Key.Key_S: self.approve_and_add_random,
+            Qt.Key.Key_A: self.approve_and_next,
+            Qt.Key.Key_D: self.mark_and_next,
+            Qt.Key.Key_S: self.approve_add_and_next,
         }.get(key)
-
-    def _add_from_key(self) -> None:
-        if self.master.add_button.isEnabled():
-            self.add_prompt()
 
     # --- status ------------------------------------------------------------------------
 

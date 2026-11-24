@@ -62,8 +62,8 @@ command.
 Defaults and rules:
 
 - **Default layer set-up:** every animation opens in **Default**:
-  `render_scene.png` at the bottom (eye off), `render.png` above it (eye on), and all
-  other layers above, ordered by the number of frames they are in (most at the bottom,
+  `render_scene.png` at the bottom (eye off), `render.png` above it (eye on),
+  `render-photo.png` right above `render.png` (eye on), and all other layers above, ordered by the number of frames they are in (most at the bottom,
   ties by name); a layer with `aircraft` in its name gets **R** on and the eye off.
   Without these names the layers simply follow the frame-count order, all visible.
 - **Custom:** any change of the eye, R or the order switches the combo to Custom.
@@ -123,10 +123,10 @@ entry per Add. Other keys in the file are kept.
 | Space | Play / Stop |
 | ↑ / ↓ | Previous / next animation (across pages; stops at the first and the last) |
 | ← / → or `,` / `.` | Previous / next frame (wraps around) |
-| A | Thumbs-up of the selected animation |
-| D | Trash of the selected animation |
-| S | Approve the selected animation (never takes an approval back), pick a random prompt in the combo and Add it; without `render.png` in the frame it only approves |
-| Ctrl+Space | Add the prompt to the queue (Watch Me Recorder also uses Ctrl+Space while it runs) |
+| A | Thumbs-up of the selected animation (gray or red row turns green, green turns gray), then the next animation |
+| D | Trash of the selected animation (gray or green row turns red, red turns gray), then the next animation |
+| S | Approve the selected animation (never takes an approval back), pick a random prompt in the combo and Add it for the frame shown, then the next animation; without prompts or without `render.png` in the frame it only approves and moves on; while the animation is still loading it does nothing |
+| Ctrl+Space | Show / hide `render_aircraft.png`, like a click on its eye; nothing when the frame shown has no such image (Watch Me Recorder also uses Ctrl+Space while it runs) |
 | F | Zoom to fit |
 | 1 | 100 % |
 | F5 | Reload (new animations, frames, files and prompts; keeps the page and the deletion marks) |
@@ -152,4 +152,4 @@ The source is in `src/ai_mod_painter`:
 
 The design and the decisions behind it are in `implementation-plan.md`,
 `implementation-plan-2.md`, `implementation-plan-3.md`, `implementation-plan-4.md`,
-`implementation-plan-5.md` and `implementation-plan-6.md`.
+`implementation-plan-5.md`, `implementation-plan-6.md` and `implementation-plan-7.md`.
