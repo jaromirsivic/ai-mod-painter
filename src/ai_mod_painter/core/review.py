@@ -90,6 +90,24 @@ def append_prompt_record(
     _write_config(folder, config)
 
 
+def prompt_marks(folder: Path) -> dict[str, str]:
+    """Frame name -> prompt file name of the last ``prompts`` entry for that frame.
+
+    The log is in time order, so the last entry wins. Broken entries are skipped.
+    """
+    records = _read_config(folder).get(PROMPTS_KEY)
+    marks: dict[str, str] = {}
+    if not isinstance(records, list):
+        return marks
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        frame, prompt = record.get("frame"), record.get("prompt")
+        if isinstance(frame, str) and isinstance(prompt, str):
+            marks[frame] = prompt
+    return marks
+
+
 def _retry_writable(function, path, error: BaseException) -> None:
     """``shutil.rmtree`` error handler: clear the read-only flag and try once more."""
     if not isinstance(error, PermissionError):

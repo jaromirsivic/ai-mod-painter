@@ -4,7 +4,7 @@ import json
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QColor, QMouseEvent
 from PySide6.QtWidgets import QApplication, QLineEdit
 
 from ai_mod_painter.core.prompt_queue import queue_file_name
@@ -13,6 +13,7 @@ from ai_mod_painter.ui.animation_panel import thumb_rect, trash_rect
 from ai_mod_painter.ui.image_view import MAX_ZOOM, MIN_ZOOM
 from ai_mod_painter.ui.layers_panel import CUSTOM_MODE, DEFAULT_MODE
 from ai_mod_painter.ui.main_window import MainWindow
+from ai_mod_painter.ui.master_bar import MARK_HEIGHT, SLIDER_MAX_WIDTH
 from tests.conftest import make_image
 
 BLUE = (0, 0, 255, 255)
@@ -600,3 +601,68 @@ def test_text_field_keeps_arrows_and_letters(qtbot, window, make_tree):
     assert field.text() == "aab"
     assert panel.selected_animation().name == "a1"
     assert not panel.is_approved(root / "a1")
+
+
+# --- prompt marks above the slider ------------------------------------------------------
+
+
+def render_tree(make_tree, names=("a1", "a2"), frames=3):
+    spec = {
+        f"{name}/frame{i}/render.png": {"size": (8, 4)} for name in names for i in range(frames)
+    }
+    return make_tree(spec)
+
+
+def choose_prompt(window, name):
+    combo = window.master.prompt_combo
+    combo.setCurrentIndex(combo.findText(name))
+
+
+def test_add_marks_the_frame_with_the_color_of_the_last_prompt(qtbot, window, make_tree, tmp_path):
+    write_prompt(tmp_path, name="convert")
+    write_prompt(tmp_path, name="convert_winter")
+    window.load_prompts()
+    colors = window.master.prompt_colors()
+    root = render_tree(make_tree)
+    open_first(qtbot, window, root)
+    assert window.master.slider.marks() == {}
+
+    choose_prompt(window, "convert")
+    window.add_prompt()
+    assert window.master.slider.marks() == {0: colors["convert.md"]}
+
+    choose_prompt(window, "convert_winter")
+    window.add_prompt()  # the last prompt of the frame wins
+    window.master.slider.setValue(2)
+    qtbot.waitUntil(lambda: window.shown_index == 2, timeout=5000)
+    choose_prompt(window, "convert")
+    window.add_prompt()
+    assert window.master.slider.marks() == {
+        0: colors["convert_winter.md"],
+        2: colors["convert.md"],
+    }
+
+    switch_to(qtbot, window, 1)  # another animation: no prompts there
+    assert window.master.slider.marks() == {}
+    switch_to(qtbot, window, 0)  # back: the marks come from the log
+    assert window.master.slider.marks() == {
+        0: colors["convert_winter.md"],
+        2: colors["convert.md"],
+    }
+
+
+def test_marks_are_drawn_above_their_frame(qtbot, window, make_tree):
+    open_first(qtbot, window, render_tree(make_tree, names=("a1",), frames=5))
+    slider = window.master.slider
+    strip = window.master.mark_strip
+    slider.set_marks({1: QColor("#FF0000")})
+    slider.setValue(4)
+    image = strip.grab().toImage()
+    y = MARK_HEIGHT // 2
+    assert image.pixelColor(slider.mark_x(1), y) == QColor("#FF0000")
+    assert image.pixelColor(slider.mark_x(3), y) != QColor("#FF0000")
+    assert strip.geometry().bottom() < slider.geometry().top()  # the strip is above
+
+
+def test_slider_may_grow_to_400_px():
+    assert SLIDER_MAX_WIDTH == 400

@@ -11,6 +11,7 @@ from ai_mod_painter.core.review import (
     CONFIG_NAME,
     append_prompt_record,
     delete_folder,
+    prompt_marks,
     read_approved,
     timestamp,
     write_approved,
@@ -76,6 +77,22 @@ def test_prompt_records_are_appended(tmp_path):
             "queue_file": "bbbb.md",
         },
     ]
+
+
+def test_prompt_marks_last_entry_of_each_frame_wins(tmp_path):
+    assert prompt_marks(tmp_path) == {}
+    append_prompt_record(tmp_path, "convert.md", "frame0", "a.md", now=NOW)
+    append_prompt_record(tmp_path, "convert_winter.md", "frame3", "b.md", now=NOW)
+    append_prompt_record(tmp_path, "convert_autumn.md", "frame0", "c.md", now=NOW)
+    assert prompt_marks(tmp_path) == {"frame0": "convert_autumn.md", "frame3": "convert_winter.md"}
+
+
+def test_prompt_marks_skip_broken_entries(tmp_path):
+    (tmp_path / CONFIG_NAME).write_text(
+        '{"prompts": [1, {"frame": "frame1"}, {"frame": "frame2", "prompt": "x.md"}]}',
+        encoding="utf-8",
+    )
+    assert prompt_marks(tmp_path) == {"frame2": "x.md"}
 
 
 def test_write_into_a_missing_folder_raises(tmp_path):

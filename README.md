@@ -54,7 +54,7 @@ command.
 | Where | What |
 |---|---|
 | Left panel | A path box and a **…** button to choose the folder. Animations are listed 100 per page, with **‹ ›** to change pages. Rows are gray; the **thumbs-up** near the end of a row approves the animation (green row, `ai-mod-config.json` is written; click again to take it back), the **trash**, the last icon, marks it for deletion (red row, nothing is deleted yet). The last one wins: marking an approved row takes the approval back, approving a marked row removes the mark. **Reload** lists the folder again, clears the deletion marks and goes to page 1. **Delete Selected** asks once more and then deletes the marked animation folders **permanently** (no Recycle Bin). |
-| Bar above the image | **◧ / ◨** show or hide the side panels. **▶ / ■** plays the frames in a loop at 10 fps until Stop. The slider and its label show the current frame. On the right, the prompt combo and **Add** put a prompt into the queue (see below). |
+| Bar above the image | **◧ / ◨** show or hide the side panels. **▶ / ■** plays the frames in a loop at 10 fps until Stop. The slider (up to 400 px wide) and its label show the current frame; a short colored line above a frame means a prompt was queued for it. On the right, the prompt combo and **Add** put a prompt into the queue (see below). |
 | Image | Mouse wheel zooms (1/64×–64×) around the cursor. Drag with the left or middle button to pan. |
 | Right panel | Layers, with the top row drawn on top. The combo next to the title shows **Default** or **Custom** (see below). Drag a row to reorder. The **eye** shows or hides a layer, and **R** draws its opaque pixels red with their alpha kept, which works as a mask. Rows dim when the layer is missing from the current frame. |
 | Status line | The canvas size (from the bottom-most layer), the zoom, and the pixel under the cursor (`x,y #RRGGBBAA`). |
@@ -85,6 +85,15 @@ first 16 hex characters of the SHA-256 of `<absolute render.png path>,<absolute
 template path>`, so the same frame with the same prompt always gets the same file, and
 adding it again replaces it. Every Add is also recorded in the review log. Another
 program processes the queue; the app only fills it.
+
+Each template has a color, shown as a square in the combo: the templates in
+alphabetical order take red, orange, yellow, green, cyan, blue and magenta (the Watch Me
+drawing colors), then purple, lime, pink, brown and teal, and start again after that.
+Adding or removing a template shifts the colors of the ones after it. Every frame with
+a queued prompt gets a short vertical line in that color above its position on the
+slider; with several prompts the last one's color wins. The marks come from the review
+log, so they are there again when you come back to the animation. A prompt that is no
+longer in `assets/prompts` is shown gray.
 
 ### Review log
 
@@ -137,4 +146,4 @@ The source is in `src/ai_mod_painter`:
 - `ui/` holds the widgets.
 
 The design and the decisions behind it are in `implementation-plan.md`,
-`implementation-plan-2.md` and `implementation-plan-3.md`.
+`implementation-plan-2.md`, `implementation-plan-3.md` and `implementation-plan-4.md`.

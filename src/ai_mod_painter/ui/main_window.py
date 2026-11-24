@@ -35,6 +35,7 @@ from ai_mod_painter.core.image_cache import ImageCache
 from ai_mod_painter.core.layer_presets import default_preset, keep_states
 from ai_mod_painter.core.layer_state import LayerState
 from ai_mod_painter.core.library import Animation, scan_animation
+from ai_mod_painter.core.prompt_colors import color_of
 from ai_mod_painter.core.prompt_queue import (
     PROMPTS_DIR,
     QUEUE_DIR,
@@ -42,7 +43,7 @@ from ai_mod_painter.core.prompt_queue import (
     enqueue,
     list_prompts,
 )
-from ai_mod_painter.core.review import append_prompt_record, delete_folder
+from ai_mod_painter.core.review import append_prompt_record, delete_folder, prompt_marks
 from ai_mod_painter.ui.animation_panel import AnimationPanel
 from ai_mod_painter.ui.image_view import ImageView, format_zoom
 from ai_mod_painter.ui.layers_panel import DEFAULT_MODE, LayersPanel
@@ -392,6 +393,7 @@ class MainWindow(QMainWindow):
             self._set_layer_states(preset)
             self.layers.set_mode(DEFAULT_MODE)
         self.master.set_frames([f.name for f in animation.frames])
+        self._update_marks()
         self._shown_index = None
 
         if not animation.frames:
@@ -558,6 +560,22 @@ class MainWindow(QMainWindow):
 
     def load_prompts(self) -> None:
         self.master.set_prompts(list_prompts(self._prompts_dir))
+        self._update_marks()
+
+    def _update_marks(self) -> None:
+        """Marks above the slider: the last prompt of each frame, from the review log."""
+        if self._animation is None:
+            self.master.set_marks({})
+            return
+        index = {frame.name: i for i, frame in enumerate(self._animation.frames)}
+        colors = self.master.prompt_colors()
+        self.master.set_marks(
+            {
+                index[frame]: color_of(prompt, colors)
+                for frame, prompt in prompt_marks(self._animation.path).items()
+                if frame in index
+            }
+        )
 
     def _prompt_source(self) -> Path | None:
         """``render.png`` of the current frame, if the frame has one."""
@@ -592,6 +610,7 @@ class MainWindow(QMainWindow):
                 f"the log in the animation folder: {error.strerror or error}"
             )
             return
+        self._update_marks()
         self._show_info(f"Queued {template.stem} for {where} as {queued.name}")
 
     # --- keys ----------------------------------------------------------------------------
