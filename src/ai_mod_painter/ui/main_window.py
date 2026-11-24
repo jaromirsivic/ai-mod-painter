@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections.abc import Callable
 from pathlib import Path
 
@@ -41,8 +42,10 @@ from ai_mod_painter.core.prompt_queue import (
     QUEUE_DIR,
     SOURCE_LAYER,
     enqueue,
+    first_photo_frame,
     list_prompts,
 )
+from ai_mod_painter.core.resolution import describe_sizes, image_sizes, is_uniform
 from ai_mod_painter.core.review import append_prompt_record, delete_folder, prompt_marks
 from ai_mod_painter.ui.animation_panel import AnimationPanel
 from ai_mod_painter.ui.image_view import ImageView, format_zoom
@@ -77,6 +80,12 @@ class _Task(QRunnable):
         self._signals.done.emit(self._token, result, error)
 
 
+def _scan(path: Path) -> tuple[Animation, dict]:
+    """Worker thread: the animation and the sizes of all its images."""
+    animation = scan_animation(path)
+    return animation, image_sizes(animation)
+
+
 class MainWindow(QMainWindow):
     animation_loaded = Signal()
     frame_shown = Signal(int)
@@ -87,12 +96,14 @@ class MainWindow(QMainWindow):
         cache: ImageCache | None = None,
         prompts_dir: Path = PROMPTS_DIR,
         queue_dir: Path = QUEUE_DIR,
+        rng: random.Random | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self._settings = settings if settings is not None else QSettings()
         self._prompts_dir = Path(prompts_dir)
         self._queue_dir = Path(queue_dir)
+        self._rng = rng if rng is not None else random.Random()
         self.cache = cache if cache is not None else ImageCache(parent=self)
         self.cache.image_loaded.connect(self._on_image_loaded)
 
@@ -129,6 +140,7 @@ class MainWindow(QMainWindow):
         self.animations.animation_selected.connect(self.open_animation)
         self.animations.reload_clicked.connect(self.reload_all)
         self.animations.delete_clicked.connect(self.delete_marked)
+        self.animations.photo_toggled.connect(self._on_photo_toggled)
 
         self.master = MasterBar()
         self.master.frame_changed.connect(self.set_frame)
@@ -301,6 +313,7 @@ class MainWindow(QMainWindow):
         self._image = None
         self.master.set_frames([])
         self.layers.set_layers([])
+        self.layers.set_size_warning(None)
         self.view.set_image(None)
         self._update_status()
         self._update_add_button()
@@ -308,13 +321,14 @@ class MainWindow(QMainWindow):
     def open_animation(self, path: Path) -> None:
         """Scan the animation on a worker thread, then show it.
 
-        Playback keeps running. The frame number stays when the new animation has that
-        many frames; otherwise it starts at the first frame.
+        Playback keeps running. With Photo pressed it starts at the first frame with
+        ``render-photo.png``. Otherwise (or without such a frame) the frame number
+        stays when the new animation has that many frames, else it is the first frame.
         """
         self._scan_token += 1
         token = self._scan_token
         self.view.set_message(f"Loading {Path(path).name}…")
-        self._scan_pool.start(_Task(token, lambda: scan_animation(Path(path)), self._scan_signals))
+        self._scan_pool.start(_Task(token, lambda: _scan(Path(path)), self._scan_signals))
 
     def reload(self) -> None:
         """F5: list the root again and rescan the open animation (new frames and files)."""
@@ -365,17 +379,18 @@ class MainWindow(QMainWindow):
             self._scan_token += 1
             token = self._scan_token
             path = self._animation.path
-            self._scan_pool.start(_Task(token, lambda: scan_animation(path), self._scan_signals))
+            self._scan_pool.start(_Task(token, lambda: _scan(path), self._scan_signals))
 
-    def _on_scanned(self, token: int, animation: Animation | None, error: Exception | None) -> None:
+    def _on_scanned(self, token: int, result: tuple | None, error: Exception | None) -> None:
         if token != self._scan_token:
             return
-        if error is not None or animation is None:
+        if error is not None or result is None:
             self._close_animation()
             self._show_error(f"Cannot read the animation: {error}")
             self.view.set_message("Cannot read this animation")
             return
 
+        animation, sizes = result
         reloading = self._animation is not None and self._animation.path == animation.path
         previous_frame = (
             self._animation.frames[self._index].name
@@ -394,6 +409,7 @@ class MainWindow(QMainWindow):
             self.layers.set_mode(DEFAULT_MODE)
         self.master.set_frames([f.name for f in animation.frames])
         self._update_marks()
+        self.layers.set_size_warning(None if is_uniform(sizes) else describe_sizes(sizes))
         self._shown_index = None
 
         if not animation.frames:
@@ -411,6 +427,8 @@ class MainWindow(QMainWindow):
             names = [f.name for f in animation.frames]
             if previous_frame in names:
                 index = names.index(previous_frame)
+        elif self.animations.is_photo_on() and first_photo_frame(animation) is not None:
+            index = first_photo_frame(animation)
         elif 0 <= previous_index < len(animation.frames):
             index = previous_index
         self._fit_pending = not reloading
@@ -435,6 +453,13 @@ class MainWindow(QMainWindow):
             return
         self._set_layer_states(default_preset(self._animation.layers))
         self._on_layers_changed()
+
+    def _on_photo_toggled(self, on: bool) -> None:
+        """Pressing Photo also jumps in the animation already open."""
+        if on and self._animation is not None:
+            index = first_photo_frame(self._animation)
+            if index is not None:
+                self.set_frame(index)
 
     # --- frames ------------------------------------------------------------------------
 
@@ -613,10 +638,32 @@ class MainWindow(QMainWindow):
         self._update_marks()
         self._show_info(f"Queued {template.stem} for {where} as {queued.name}")
 
+    def approve_and_add_random(self) -> None:
+        """S: approve the animation (never un-approve), then Add a random prompt.
+
+        Does nothing while the selected animation is still loading, so the prompt can
+        never go to a frame of the animation shown before.
+        """
+        if self._animation is None:
+            return
+        if self.animations.selected_animation() != self._animation.path:
+            return
+        if not self.animations.approve_selected():
+            return
+        prompts = self.master.prompts()
+        if not prompts:
+            self._show_error(f"Approved; no prompts in {self._prompts_dir}")
+            return
+        if self._prompt_source() is None:
+            self._show_error(f"Approved; no {SOURCE_LAYER} in this frame to add a prompt for")
+            return
+        self.master.select_prompt(self._rng.choice(prompts))
+        self.add_prompt()
+
     # --- keys ----------------------------------------------------------------------------
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        """Window-wide keys: arrows, A, D and Ctrl+Space, whatever widget has the focus.
+        """Window-wide keys: arrows, A, D, S and Ctrl+Space, whatever widget has the focus.
 
         Text fields keep the arrows and letters; popups and dialogs are left alone.
         """
@@ -648,6 +695,7 @@ class MainWindow(QMainWindow):
             Qt.Key.Key_Right: lambda: self.step(1),
             Qt.Key.Key_A: self.animations.toggle_approved_selected,
             Qt.Key.Key_D: self.animations.toggle_marked_selected,
+            Qt.Key.Key_S: self.approve_and_add_random,
         }.get(key)
 
     def _add_from_key(self) -> None:

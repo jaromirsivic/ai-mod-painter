@@ -6,6 +6,9 @@ Rows are reordered by drag and drop.
 The combo box next to the title shows the mode: Default (the preset of
 ``core/layer_presets.py``) or Custom. Any change by the user (eye, R, order) switches it
 to Custom; choosing Default asks for the preset again (``default_requested``).
+
+When the images of the animation are not all the same size, the whole panel turns
+dark red and the line at the bottom lists the sizes (``set_size_warning``).
 """
 
 from __future__ import annotations
@@ -38,6 +41,12 @@ PRESENT_ROLE = Qt.ItemDataRole.UserRole + 4
 DEFAULT_MODE = "default"
 CUSTOM_MODE = "custom"
 MODES = ((DEFAULT_MODE, "Default"), (CUSTOM_MODE, "Custom"))
+
+HINT = "Drag to reorder. The top row is drawn on top."
+WARNING_BACKGROUND = "#5A1A1A"  # dark red, not bright red
+WARNING_STYLE = (
+    f"#layersPanel, #layersPanel QListWidget {{ background-color: {WARNING_BACKGROUND}; }}"
+)
 
 ROW_HEIGHT = 26
 ICON = 18
@@ -169,6 +178,9 @@ class LayersPanel(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("layersPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._size_warning: str | None = None
         self._title = QLabel("Layers")
         self._title.setStyleSheet("font-weight: bold; padding: 4px 2px;")
         self.mode_combo = QComboBox()
@@ -187,7 +199,7 @@ class LayersPanel(QWidget):
         self._delegate = _LayerDelegate(self._list)
         self._list.setItemDelegate(self._delegate)
         self._delegate.toggled.connect(self._on_toggled)
-        self._hint = QLabel("Drag to reorder. The top row is drawn on top.")
+        self._hint = QLabel(HINT)
         self._hint.setWordWrap(True)
         self._hint.setStyleSheet("color: gray; font-size: 11px; padding: 2px;")
 
@@ -231,6 +243,25 @@ class LayersPanel(QWidget):
     def _user_changed(self) -> None:
         self.set_mode(CUSTOM_MODE)
         self.changed.emit()
+
+    # --- size warning ------------------------------------------------------------------
+
+    def size_warning(self) -> str | None:
+        return self._size_warning
+
+    def set_size_warning(self, sizes: str | None) -> None:
+        """Dark red panel and the sizes in the bottom line; ``None`` for the normal look."""
+        if sizes == self._size_warning:
+            return
+        self._size_warning = sizes
+        if sizes is None:
+            self.setStyleSheet("")
+            self._hint.setText(HINT)
+            self._hint.setStyleSheet("color: gray; font-size: 11px; padding: 2px;")
+        else:
+            self.setStyleSheet(WARNING_STYLE)
+            self._hint.setText(f"Images differ in size: {sizes}")
+            self._hint.setStyleSheet("color: #ffd0d0; font-size: 11px; padding: 2px;")
 
     # --- content -----------------------------------------------------------------------
 

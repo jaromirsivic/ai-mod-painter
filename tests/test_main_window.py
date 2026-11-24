@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, Qt
@@ -11,7 +12,7 @@ from ai_mod_painter.core.prompt_queue import queue_file_name
 from ai_mod_painter.core.review import CONFIG_NAME, read_approved
 from ai_mod_painter.ui.animation_panel import thumb_rect, trash_rect
 from ai_mod_painter.ui.image_view import MAX_ZOOM, MIN_ZOOM
-from ai_mod_painter.ui.layers_panel import CUSTOM_MODE, DEFAULT_MODE
+from ai_mod_painter.ui.layers_panel import CUSTOM_MODE, DEFAULT_MODE, WARNING_BACKGROUND
 from ai_mod_painter.ui.main_window import MainWindow
 from ai_mod_painter.ui.master_bar import MARK_HEIGHT, SLIDER_MAX_WIDTH
 from tests.conftest import make_image
@@ -666,3 +667,157 @@ def test_marks_are_drawn_above_their_frame(qtbot, window, make_tree):
 
 def test_slider_may_grow_to_400_px():
     assert SLIDER_MAX_WIDTH == 400
+
+
+# --- S: approve and add a random prompt -------------------------------------------------
+
+
+def queued(tmp_path):
+    folder = tmp_path / "queue"
+    return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
+
+
+def config(path):
+    return json.loads((path / CONFIG_NAME).read_text(encoding="utf-8"))
+
+
+def test_s_approves_and_adds_a_random_prompt_and_never_unapproves(
+    qtbot, window, make_tree, tmp_path
+):
+    for name in ("convert", "convert_autumn", "convert_winter"):
+        write_prompt(tmp_path, name=name)
+    window.load_prompts()
+    window._rng = random.Random(7)
+    root = render_tree(make_tree, names=("a1",))
+    a1 = root / "a1"
+    open_first(qtbot, window, root)
+
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_S)
+    assert row_state(window.animations, a1) == (True, False)
+    first = config(a1)
+    assert len(first["prompts"]) == 1
+    assert first["prompts"][0]["prompt"] == window.master.selected_prompt().name
+    assert len(queued(tmp_path)) == 1
+    assert 0 in window.master.slider.marks()
+
+    for _ in range(5):
+        press(qtbot, window.layers.list_widget, Qt.Key.Key_S)
+    assert row_state(window.animations, a1) == (True, False)  # still approved
+    second = config(a1)
+    assert second["approved_changed_at"] == first["approved_changed_at"]
+    assert len(second["prompts"]) == 6
+    assert len({p["prompt"] for p in second["prompts"]}) > 1  # random, not always the same
+
+
+def test_s_takes_a_deletion_mark_away(qtbot, window, make_tree, tmp_path):
+    write_prompt(tmp_path)
+    window.load_prompts()
+    root = render_tree(make_tree, names=("a1",))
+    open_first(qtbot, window, root)
+    window.animations.toggle_marked(root / "a1")
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_S)
+    assert row_state(window.animations, root / "a1") == (True, False)
+
+
+def test_s_without_render_png_only_approves(qtbot, window, make_tree, tmp_path):
+    write_prompt(tmp_path)
+    window.load_prompts()
+    root = make_tree({"a1/frame0/other.png": {"size": (8, 4)}})
+    open_first(qtbot, window, root)
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_S)
+    assert window.animations.is_approved(root / "a1")
+    assert queued(tmp_path) == []
+    assert "no render.png" in window.message_label.text()
+
+
+def test_s_waits_until_the_selected_animation_is_loaded(qtbot, window, make_tree, tmp_path):
+    write_prompt(tmp_path)
+    window.load_prompts()
+    root = render_tree(make_tree)
+    open_first(qtbot, window, root)
+    window.animations.select_row(1)  # a2 is selected, its scan has not come back yet
+    window.approve_and_add_random()
+    assert not window.animations.is_approved(root / "a2")
+    assert not window.animations.is_approved(root / "a1")
+    assert queued(tmp_path) == []
+
+
+# --- Photo --------------------------------------------------------------------------------
+
+
+def photo_tree(make_tree):
+    spec = {f"{name}/frame{i}/render.png": {"size": (8, 4)} for name in "abc" for i in range(4)}
+    spec["a/frame1/render-photo.png"] = {"size": (8, 4)}
+    spec["a/frame2/render-photo.png"] = {"size": (8, 4)}
+    spec["b/frame3/render-photo.png"] = {"size": (8, 4)}
+    return make_tree(spec)
+
+
+def test_photo_button_sits_between_reload_and_delete(window):
+    panel = window.animations
+    row = [panel.reload_button, panel.photo_button, panel.delete_button]
+    xs = [button.mapTo(panel, QPoint(0, 0)).x() for button in row]
+    assert xs == sorted(xs)
+    assert panel.photo_button.isCheckable() and not panel.photo_button.isChecked()
+
+
+def test_photo_opens_every_animation_at_its_first_photo(qtbot, window, make_tree):
+    root = photo_tree(make_tree)
+    open_first(qtbot, window, root)
+    assert window.frame_index == 0  # Photo is off: the usual rules
+
+    window.animations.photo_button.click()  # also jumps in the open animation
+    qtbot.waitUntil(lambda: window.shown_index == 1, timeout=5000)
+
+    press(qtbot, window.layers.list_widget, Qt.Key.Key_Down)
+    qtbot.waitUntil(lambda: window.animation.name == "b", timeout=5000)
+    assert window.frame_index == 3
+
+    switch_to(qtbot, window, 2)  # no photo: the frame number is kept
+    assert window.frame_index == 3
+
+    window.animations.photo_button.click()  # off again
+    switch_to(qtbot, window, 0)
+    assert window.frame_index == 3
+
+
+def test_reload_keeps_the_frame_with_photo_on(qtbot, window, make_tree):
+    root = photo_tree(make_tree)
+    window.animations.photo_button.click()
+    open_first(qtbot, window, root)
+    assert window.frame_index == 1
+    window.master.slider.setValue(3)
+    qtbot.waitUntil(lambda: window.shown_index == 3, timeout=5000)
+    with qtbot.waitSignal(window.animation_loaded, timeout=5000):
+        window.reload()
+    assert window.frame_index == 3
+
+
+# --- resolution check ---------------------------------------------------------------------
+
+
+def panel_background(window):
+    return window.layers.grab().toImage().pixelColor(2, 2)
+
+
+def test_layers_panel_turns_dark_red_when_image_sizes_differ(qtbot, window, make_tree):
+    root = make_tree(
+        {
+            "a1/frame0/render.png": {"size": (8, 4)},
+            "a1/frame1/render.png": {"size": (8, 4)},
+            "a2/frame0/render.png": {"size": (8, 4)},
+            "a2/frame1/render.png": {"size": (8, 4)},
+            "a2/frame1/mask.png": {"size": (16, 8)},
+        }
+    )
+    open_first(qtbot, window, root)
+    normal = panel_background(window)
+    assert window.layers.size_warning() is None
+
+    switch_to(qtbot, window, 1)
+    assert window.layers.size_warning() == "8 x 4 (2), 16 x 8 (1)"
+    assert panel_background(window) == QColor(WARNING_BACKGROUND)
+
+    switch_to(qtbot, window, 0)
+    assert window.layers.size_warning() is None
+    assert panel_background(window) == normal

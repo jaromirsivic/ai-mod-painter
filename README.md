@@ -53,10 +53,10 @@ command.
 
 | Where | What |
 |---|---|
-| Left panel | A path box and a **…** button to choose the folder. Animations are listed 100 per page, with **‹ ›** to change pages. Rows are gray; the **thumbs-up** near the end of a row approves the animation (green row, `ai-mod-config.json` is written; click again to take it back), the **trash**, the last icon, marks it for deletion (red row, nothing is deleted yet). The last one wins: marking an approved row takes the approval back, approving a marked row removes the mark. **Reload** lists the folder again, clears the deletion marks and goes to page 1. **Delete Selected** asks once more and then deletes the marked animation folders **permanently** (no Recycle Bin). |
+| Left panel | A path box and a **…** button to choose the folder. Animations are listed 100 per page, with **‹ ›** to change pages. Rows are gray; the **thumbs-up** near the end of a row approves the animation (green row, `ai-mod-config.json` is written; click again to take it back), the **trash**, the last icon, marks it for deletion (red row, nothing is deleted yet). The last one wins: marking an approved row takes the approval back, approving a marked row removes the mark. **Reload** lists the folder again, clears the deletion marks and goes to page 1. **Photo** is a toggle, off at every start: while it is pressed, every animation you open (click or ↑ / ↓) starts at its first frame with `render-photo.png`, and pressing it jumps there in the open animation too. **Delete Selected** asks once more and then deletes the marked animation folders **permanently** (no Recycle Bin). |
 | Bar above the image | **◧ / ◨** show or hide the side panels. **▶ / ■** plays the frames in a loop at 10 fps until Stop. The slider (up to 400 px wide) and its label show the current frame; a short colored line above a frame means a prompt was queued for it. On the right, the prompt combo and **Add** put a prompt into the queue (see below). |
 | Image | Mouse wheel zooms (1/64×–64×) around the cursor. Drag with the left or middle button to pan. |
-| Right panel | Layers, with the top row drawn on top. The combo next to the title shows **Default** or **Custom** (see below). Drag a row to reorder. The **eye** shows or hides a layer, and **R** draws its opaque pixels red with their alpha kept, which works as a mask. Rows dim when the layer is missing from the current frame. |
+| Right panel | Layers, with the top row drawn on top. The combo next to the title shows **Default** or **Custom** (see below). Drag a row to reorder. The **eye** shows or hides a layer, and **R** draws its opaque pixels red with their alpha kept, which works as a mask. Rows dim when the layer is missing from the current frame. When the images of the animation are not all the same size (every image of every frame is compared), the whole panel turns dark red and its bottom line lists the sizes. |
 | Status line | The canvas size (from the bottom-most layer), the zoom, and the pixel under the cursor (`x,y #RRGGBBAA`). |
 
 Defaults and rules:
@@ -71,8 +71,10 @@ Defaults and rules:
   to Default; F5 and Reload keep the set-up of the open animation.
 - **Canvas size:** the bottom-most layer present in a frame gives the size. Other
   layers are stretched to it.
-- **Switching animations:** playback keeps running, and the frame number stays when
-  the new animation has that many frames; otherwise it starts at the first frame.
+- **Switching animations:** playback keeps running. With **Photo** pressed the
+  animation starts at its first frame with `render-photo.png`; otherwise (or without
+  such a frame) the frame number stays when the new animation has that many frames,
+  else it starts at the first frame. F5 and Reload keep the current frame.
 
 ### Prompt queue
 
@@ -122,13 +124,14 @@ entry per Add. Other keys in the file are kept.
 | ← / → or `,` / `.` | Previous / next frame (wraps around) |
 | A | Thumbs-up of the selected animation |
 | D | Trash of the selected animation |
+| S | Approve the selected animation (never takes an approval back), pick a random prompt in the combo and Add it; without `render.png` in the frame it only approves |
 | Ctrl+Space | Add the prompt to the queue (Watch Me Recorder also uses Ctrl+Space while it runs) |
 | F | Zoom to fit |
 | 1 | 100 % |
 | F5 | Reload (new animations, frames, files and prompts; keeps the page and the deletion marks) |
 | Ctrl+O | Open folder |
 
-The arrows, A, D and Ctrl+Space work wherever the focus is in the window; only the path
+The arrows, A, D, S and Ctrl+Space work wherever the focus is in the window; only the path
 box keeps the arrows and letters for typing.
 
 ## Development
@@ -142,8 +145,10 @@ uv run ruff format --check
 The source is in `src/ai_mod_painter`:
 
 - `core/` holds the folder model, the layer state, the Default layer preset, the
-  review file and deletion, the prompt queue, the compositor and the image cache.
+  review file and deletion, the prompt queue, the image size check, the compositor
+  and the image cache.
 - `ui/` holds the widgets.
 
 The design and the decisions behind it are in `implementation-plan.md`,
-`implementation-plan-2.md`, `implementation-plan-3.md` and `implementation-plan-4.md`.
+`implementation-plan-2.md`, `implementation-plan-3.md`, `implementation-plan-4.md` and
+`implementation-plan-5.md`.

@@ -1,4 +1,4 @@
-"""Left panel: root folder path, Reload / Delete Selected, the animations, the pager.
+"""Left panel: root folder path, Reload / Photo / Delete Selected, the animations, the pager.
 
 Animations are listed 100 per page. Each row has a thumbs-up icon (approve: the row
 turns green and ``ai-mod-config.json`` is written into the animation folder) and, as the
@@ -6,6 +6,9 @@ last item, a trash icon (mark for deletion: the row turns red, nothing is delete
 Delete Selected). Rows are gray otherwise. Both icons are switches and the last one
 wins: marking an approved row takes the approval back, approving a marked row removes
 the mark. Deletion marks are kept in memory only.
+
+Photo is a toggle (off at every start): while it is on, the main window shows the
+first frame with a processed photo of every animation it opens.
 """
 
 from __future__ import annotations
@@ -180,6 +183,7 @@ class AnimationPanel(QWidget):
     animation_selected = Signal(object)  # Path
     reload_clicked = Signal()
     delete_clicked = Signal()
+    photo_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -207,6 +211,12 @@ class AnimationPanel(QWidget):
             "List the folder again, clear the deletion marks and go to page 1"
         )
         self.reload_button.clicked.connect(self.reload_clicked)
+        self.photo_button = QPushButton("Photo")
+        self.photo_button.setCheckable(True)
+        self.photo_button.setToolTip(
+            "While pressed, every animation opens at its first frame with render-photo.png"
+        )
+        self.photo_button.toggled.connect(self.photo_toggled)
         self.delete_button = QPushButton("Delete Selected")
         self.delete_button.setToolTip("Permanently delete the animations marked with the trash")
         self.delete_button.clicked.connect(self.delete_clicked)
@@ -214,6 +224,7 @@ class AnimationPanel(QWidget):
         button_row = QHBoxLayout()
         button_row.setSpacing(4)
         button_row.addWidget(self.reload_button)
+        button_row.addWidget(self.photo_button)
         button_row.addWidget(self.delete_button)
 
         self._list = QListWidget()
@@ -279,6 +290,9 @@ class AnimationPanel(QWidget):
     def is_approved(self, path: Path) -> bool:
         item = self._item_of(path)
         return item is not None and bool(item.data(APPROVED_ROLE))
+
+    def is_photo_on(self) -> bool:
+        return self.photo_button.isChecked()
 
     def is_marked(self, path: Path) -> bool:
         return Path(path) in self._marked
@@ -366,6 +380,21 @@ class AnimationPanel(QWidget):
         if approved:
             self._set_marked(path, False)
 
+    def approve(self, path: Path) -> bool:
+        """S: approve (never take an approval back) and remove a deletion mark.
+
+        An approved row is left as it is, so its file and time stay untouched. Returns
+        ``False`` when the approval cannot be written or the row is not on this page.
+        """
+        path = Path(path)
+        item = self._item_of(path)
+        if item is None:
+            return False
+        if not bool(item.data(APPROVED_ROLE)) and not self._write_approval(item, True):
+            return False
+        self._set_marked(path, False)
+        return True
+
     def toggle_marked(self, path: Path) -> None:
         """Trash / D: mark or unmark for deletion; marking takes an approval back."""
         path = Path(path)
@@ -380,6 +409,10 @@ class AnimationPanel(QWidget):
         path = self.selected_animation()
         if path is not None:
             self.toggle_approved(path)
+
+    def approve_selected(self) -> bool:
+        path = self.selected_animation()
+        return path is not None and self.approve(path)
 
     def toggle_marked_selected(self) -> None:
         path = self.selected_animation()

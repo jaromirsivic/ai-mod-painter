@@ -193,6 +193,14 @@ class MasterBar(QWidget):
     def selected_prompt(self) -> Path | None:
         return self.prompt_combo.currentData()
 
+    def prompts(self) -> list[Path]:
+        return [self.prompt_combo.itemData(i) for i in range(self.prompt_combo.count())]
+
+    def select_prompt(self, path: Path) -> None:
+        index = self.prompt_combo.findData(path)
+        if index >= 0:
+            self.prompt_combo.setCurrentIndex(index)
+
     def prompt_colors(self) -> dict[str, QColor]:
         """Template file name -> color, for the templates in the combo."""
         return dict(self._prompt_colors)

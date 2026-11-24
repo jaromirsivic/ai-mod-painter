@@ -7,6 +7,9 @@ both are replaced with absolute paths, and the result is written to
 characters of the SHA-256 of ``<absolute render.png path>,<absolute template path>``,
 so the same image with the same prompt always gets the same queue file.
 
+The processed image is written next to ``render.png`` as ``render-photo.png``;
+``first_photo_frame`` finds the first frame that already has one.
+
 This module (with ``layer_presets.py``) is the only place where layer names matter; see
 CLAUDE.md.
 """
@@ -18,7 +21,7 @@ import os
 from pathlib import Path
 
 from ai_mod_painter.core.layer_presets import RENDER_LAYER
-from ai_mod_painter.core.library import natural_key
+from ai_mod_painter.core.library import Animation, layer_key, natural_key
 
 PROJECT_DIR = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = PROJECT_DIR / "assets" / "prompts"
@@ -30,6 +33,8 @@ PROMPT_EXTENSION = ".md"
 SOURCE_LAYER = RENDER_LAYER
 DESTINATION_SUFFIX = "-photo"
 HASH_LENGTH = 16
+PHOTO_LAYER = layer_key(f"{Path(SOURCE_LAYER).stem}{DESTINATION_SUFFIX}{Path(SOURCE_LAYER).suffix}")
+"""``render-photo.png``: what the queue makes of ``render.png``."""
 
 
 def list_prompts(folder: Path = PROMPTS_DIR) -> list[Path]:
@@ -50,6 +55,14 @@ def list_prompts(folder: Path = PROMPTS_DIR) -> list[Path]:
 def destination_for(source: Path) -> Path:
     """``render.png`` -> ``render-photo.png`` in the same folder."""
     return source.with_name(f"{source.stem}{DESTINATION_SUFFIX}{source.suffix}")
+
+
+def first_photo_frame(animation: Animation) -> int | None:
+    """Index of the first frame with ``render-photo.png``; ``None`` when no frame has one."""
+    for index, frame in enumerate(animation.frames):
+        if PHOTO_LAYER in frame.files:
+            return index
+    return None
 
 
 def fill_template(text: str, source: Path, destination: Path) -> str:

@@ -6,10 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from ai_mod_painter.core.library import scan_animation
 from ai_mod_painter.core.prompt_queue import (
+    PHOTO_LAYER,
     PROJECT_DIR,
     destination_for,
     enqueue,
+    first_photo_frame,
     list_prompts,
     queue_file_name,
 )
@@ -74,3 +77,21 @@ def test_enqueue_fills_every_placeholder_and_replaces_the_same_pair(tmp_path):
 def test_enqueue_missing_template_raises(tmp_path):
     with pytest.raises(OSError):
         enqueue(tmp_path / "missing.md", tmp_path / "render.png", tmp_path / "queue")
+
+
+def test_photo_layer_is_the_destination_of_render_png():
+    assert PHOTO_LAYER == destination_for(Path("render.png")).name == "render-photo.png"
+
+
+def test_first_photo_frame(make_tree):
+    root = make_tree(
+        {
+            "a/frame0/render.png": None,
+            "a/frame1/render.png": None,
+            "a/frame2/Render-Photo.PNG": None,
+            "a/frame10/render-photo.png": None,
+            "b/frame0/render.png": None,
+        }
+    )
+    assert first_photo_frame(scan_animation(root / "a")) == 2
+    assert first_photo_frame(scan_animation(root / "b")) is None
